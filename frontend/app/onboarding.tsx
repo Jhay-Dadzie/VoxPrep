@@ -7,18 +7,19 @@ import { useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Colors } from '@/constants/theme'
 import { GlobalStyles } from '@/components/styles/globalStyles'
+import Button from '@/components/button'
 
 export default function Onboarding() {
     const router = useRouter()
     const colorScheme = useColorScheme()
-
+    const colors = Colors[colorScheme ?? 'light']
     return (
-        <SafeAreaView style={[GlobalStyles.container, {backgroundColor: Colors[colorScheme ?? 'light'].background}]}>
+        <SafeAreaView style={[GlobalStyles.container, {backgroundColor: colors.background}]}>
 
         <ThemedText>This is the onboarding screen</ThemedText>
-        <TouchableOpacity onPress={() => router.push('/(tabs)/dashboard')} style={styles.button}>
-            <ThemedText>Navigate to Dashboard</ThemedText>
-        </TouchableOpacity>
+        <Button action={() => router.push('/(tabs)/dashboard')}>
+            <ThemedText>Navigate to dashboard</ThemedText>
+        </Button>
         </SafeAreaView>
     )
 }
