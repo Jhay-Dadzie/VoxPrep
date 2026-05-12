@@ -12,8 +12,8 @@ export const Colors = {
         tabBarActiveIcon: tintColorLight
     },
     dark: {
-        text: '#141A2F',
-        background: '#ECEEFE',
+        text: '#C3C6D7',
+        background: '#141A2F',
         tint: tintColorDark,
         icon: '#C3C6D7',
         tabBarActiveIcon: '#B4C5FF'
