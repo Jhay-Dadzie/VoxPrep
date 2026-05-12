@@ -25,11 +25,5 @@ export default function Onboarding() {
 }
 
 const styles = StyleSheet.create({
-    button: {
-        paddingVertical: 15,
-        backgroundColor: '#004AC6',
-        alignItems: 'center',
-        margin: 20,
-        borderRadius: 70
-    }
+    
 })
