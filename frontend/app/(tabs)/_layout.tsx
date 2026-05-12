@@ -90,15 +90,16 @@ function CustomTabBar({ state, descriptors, navigation }: BottomTabBarProps) {
 
 export default function TabLayout() {
     const colorScheme = useColorScheme()
+    const colors = Colors[colorScheme ?? 'light']
     
     return (
         <Tabs
             tabBar={props => <CustomTabBar {...props} />}
             screenOptions={{
                 headerStyle: {
-                    backgroundColor: Colors[colorScheme ?? 'light'].background,
+                    backgroundColor: colors.background,
                     borderBottomWidth: 1,
-                    borderBottomColor: colorScheme === 'dark' ? '#1E293B' : '#E2E8F0',
+                    borderBottomColor: colors.border,
                     shadowColor: '#000',
                     shadowOffset: { width: 0, height: 7 },
                     shadowOpacity: 0.05,
