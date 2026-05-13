@@ -13,6 +13,7 @@ export default function RootLayout() {
         <Stack screenOptions={{headerShown: false}}>
           <Stack.Screen name="onboarding" />
           <Stack.Screen name="(tabs)" />
+          <Stack.Screen name="(authScreens)" />
         </Stack>
         <StatusBar style="auto"/>
       </ThemeProvider>
