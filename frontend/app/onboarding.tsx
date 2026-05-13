@@ -159,7 +159,7 @@ export default function OnboardingScreen() {
           </ThemedView>
         ) : currentIndex === 2 && (
           <ThemedView style={{marginTop: 30, marginHorizontal: 20}}>
-            <Button action={() => router.push('/(authScreens)/signup')}>
+            <Button action={() => router.replace('/(authScreens)/signup')}>
               <ThemedText type='placeholderText'>Get Started</ThemedText>
             </Button>
           </ThemedView>
