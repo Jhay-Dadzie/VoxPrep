@@ -30,7 +30,10 @@ class AuthController {
       return res.status(201).json({
         success: true,
         message: result.message,
-        data: result.user,
+        data: {
+          user: result.user,
+          session: result.session,
+        },
       });
     } catch (error) {
       _error('Signup controller error:', error);

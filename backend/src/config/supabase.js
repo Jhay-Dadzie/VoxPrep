@@ -19,9 +19,50 @@ export function getSupabaseClient() {
   return supabaseClient;
 }
 
-export async function initializeUserProfile(id, email, full_name = null) {
-  const supabase = getSupabaseClient();
-  const { error } = await supabase.from('users').insert([{ id, email, full_name }]);
+function getSupabaseClientForToken(accessToken) {
+  const supabaseUrl = process.env.SUPABASE_URL
+  const supabasePublishableKey = process.env.SUPABASE_PUBLISHABLE_KEY
+
+  if (!supabaseUrl || !supabasePublishableKey) {
+    throw new Error('Missing Supabase environment variables (SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY)');
+  }
+
+  return createSupabaseClient(supabaseUrl, supabasePublishableKey, {
+    global: {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+      },
+    },
+  });
+}
+
+export async function initializeUserProfile(id, email, full_name = null, accessToken = null) {
+  const supabase = accessToken
+    ? getSupabaseClientForToken(accessToken)
+    : getSupabaseClient();
+  const profile = { id, email, full_name: full_name || null };
+
+  if (accessToken) {
+    const { data, error } = await supabase
+      .from('users')
+      .update({
+        email: profile.email,
+        full_name: profile.full_name,
+      })
+      .eq('id', id)
+      .select('id')
+      .maybeSingle();
+
+    if (error) {
+      throw error;
+    }
+
+    if (data) {
+      return;
+    }
+  }
+
+  const { error } = await supabase.from('users').insert([profile]);
 
   if (error) {
     throw error;

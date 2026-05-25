@@ -13,28 +13,30 @@ const PASSWORD_MIN_LENGTH = 8;
 /**
  * Signup validation
  */
-const signupSchema = object({
-  email: string()
+const signupSchema = Joi.object({
+  email: Joi.string()
     .email()
     .required()
     .messages({
       'string.email': 'Please provide a valid email address',
       'any.required': 'Email is required',
     }),
-  password: string()
+  password: Joi.string()
     .min(PASSWORD_MIN_LENGTH)
     .required()
     .messages({
       'string.min': `Password must be at least ${PASSWORD_MIN_LENGTH} characters long`,
       'any.required': 'Password is required',
     }),
-  full_name: string()
+  full_name: Joi.string()
     .max(255)
     .optional()
     .messages({
       'string.max': 'Full name cannot exceed 255 characters',
     }),
-}).strict();
+})
+  .rename('fullName', 'full_name', { ignoreUndefined: true, override: false })
+  .strict();
 
 /**
  * Login validation
