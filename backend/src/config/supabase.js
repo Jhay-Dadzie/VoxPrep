@@ -19,7 +19,7 @@ export function getSupabaseClient() {
   return supabaseClient;
 }
 
-function getSupabaseClientForToken(accessToken) {
+export function getSupabaseClientForToken(accessToken) {
   const supabaseUrl = process.env.SUPABASE_URL
   const supabasePublishableKey = process.env.SUPABASE_PUBLISHABLE_KEY
 
@@ -36,11 +36,11 @@ function getSupabaseClientForToken(accessToken) {
   });
 }
 
-export async function initializeUserProfile(id, email, full_name = null, accessToken = null) {
+export async function initializeUserProfile(id, email, full_name = null, accessToken = null, last_login = null) {
   const supabase = accessToken
     ? getSupabaseClientForToken(accessToken)
     : getSupabaseClient();
-  const profile = { id, email, full_name: full_name || null };
+  const profile = { id, email, full_name: full_name || null, last_login };
 
   if (accessToken) {
     const { data, error } = await supabase
@@ -48,6 +48,7 @@ export async function initializeUserProfile(id, email, full_name = null, accessT
       .update({
         email: profile.email,
         full_name: profile.full_name,
+        last_login: profile.last_login,
       })
       .eq('id', id)
       .select('id')
