@@ -75,16 +75,21 @@ const forgotPasswordSchema = object({
 const resetPasswordSchema = object({
   email: string()
     .email()
-    .required()
+    .optional()
     .messages({
       'string.email': 'Please provide a valid email address',
-      'any.required': 'Email is required',
     }),
   token: string()
-    .required()
+    .optional()
     .messages({
       'any.required': 'Reset token is required',
     }),
+  code: string()
+    .optional(),
+  access_token: string()
+    .optional(),
+  refresh_token: string()
+    .optional(),
   password: string()
     .min(PASSWORD_MIN_LENGTH)
     .required()
@@ -92,7 +97,14 @@ const resetPasswordSchema = object({
       'string.min': `Password must be at least ${PASSWORD_MIN_LENGTH} characters long`,
       'any.required': 'New password is required',
     }),
-}).strict();
+})
+  .or('code', 'access_token', 'token')
+  .with('token', 'email')
+  .messages({
+    'object.missing': 'Reset code, access token, or reset token is required',
+    'object.with': 'Email is required when using a reset token',
+  })
+  .strict();
 
 /**
  * Generic validation function
