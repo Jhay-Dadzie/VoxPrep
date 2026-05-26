@@ -78,7 +78,7 @@ const signupLimiter = authRateLimit({
 
 const loginLimiter = authRateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 5, // 5 attempts
+  max: 100, // 100 attempts
   message: 'Too many login attempts, please try again later',
   standardHeaders: true,
   legacyHeaders: false,

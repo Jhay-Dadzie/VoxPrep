@@ -55,43 +55,39 @@ class AuthController {
   /**
    * POST /auth/login
    */
-//   async login(req, res) {
-//     try {
-//       const { valid, errors, value } = validateInput(req.body, loginSchema);
-//       if (!valid) {
-//         return res.status(400).json({
-//           success: false,
-//           message: 'Validation failed',
-//           errors,
-//         });
-//       }
+  async login(req, res) {
+    try {
+      const { valid, errors, value } = validateInput(req.body, loginSchema);
+      if (!valid) {
+        return res.status(400).json({
+          success: false,
+          message: 'Validation failed',
+          errors,
+        });
+      }
 
-//       const { email, password } = value;
-//       const result = await _login({ email, password });
+      const { email, password } = value;
+      const result = await authService.login({ email, password });
 
-//       info(`User logged in: ${email}`);
+      info(`User logged in: ${email}`);
 
-//       return res.status(200).json({
-//         success: true,
-//         message: 'Login successful',
-//         data: {
-//           user: result.user,
-//           session: {
-//             access_token: result.session.access_token,
-//             token_type: result.session.token_type,
-//             expires_in: result.session.expires_in,
-//           },
-//         },
-//       });
-//     } catch (error) {
-//       _error('Login controller error:', error);
+      return res.status(200).json({
+        success: true,
+        message: 'Login successful',
+        data: {
+          user: result.user,
+          session: result.session,
+        },
+      });
+    } catch (error) {
+      _error('Login controller error:', error);
 
-//       return res.status(401).json({
-//         success: false,
-//         message: error.message || 'Login failed',
-//       });
-//     }
-//   }
+      return res.status(401).json({
+        success: false,
+        message: error.message || 'Login failed',
+      });
+    }
+  }
 
 //   /**
 //    * POST /auth/logout
@@ -182,42 +178,6 @@ class AuthController {
 //     }
 //   }
 
-  /**
-   * POST /auth/login
-   */
-  async login(req, res) {
-    try {
-      const { valid, errors, value } = validateInput(req.body, loginSchema);
-      if (!valid) {
-        return res.status(400).json({
-          success: false,
-          message: 'Validation failed',
-          errors,
-        });
-      }
-
-      const { email, password } = value;
-      const result = await authService.login({ email, password });
-
-      info(`User logged in: ${email}`);
-
-      return res.status(200).json({
-        success: true,
-        message: 'Login successful',
-        data: {
-          user: result.user,
-          session: result.session,
-        },
-      });
-    } catch (error) {
-      _error('Login controller error:', error);
-
-      return res.status(401).json({
-        success: false,
-        message: error.message || 'Login failed',
-      });
-    }
-  }
 
   async forgotPassword(req, res) {
     return res.status(501).json({

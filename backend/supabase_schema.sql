@@ -1,5 +1,5 @@
 CREATE TABLE IF NOT EXISTS users (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
   email VARCHAR(255) UNIQUE NOT NULL,
   full_name VARCHAR(255),
   created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
@@ -15,6 +15,65 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE INDEX idx_users_email ON users(email);
 CREATE INDEX idx_users_created_at ON users(created_at);
 CREATE INDEX idx_users_is_active ON users(is_active);
+
+CREATE SCHEMA IF NOT EXISTS private;
+REVOKE ALL ON SCHEMA private FROM PUBLIC;
+
+CREATE OR REPLACE FUNCTION private.sync_auth_user_to_public_user()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+BEGIN
+  INSERT INTO public.users (
+    id,
+    email,
+    full_name,
+    created_at,
+    last_login
+  )
+  VALUES (
+    NEW.id,
+    NEW.email,
+    NEW.raw_user_meta_data ->> 'full_name',
+    NEW.created_at,
+    NEW.last_sign_in_at
+  )
+  ON CONFLICT (id) DO UPDATE SET
+    email = EXCLUDED.email,
+    full_name = COALESCE(EXCLUDED.full_name, public.users.full_name),
+    last_login = EXCLUDED.last_login;
+
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS sync_auth_user_to_public_user ON auth.users;
+
+CREATE TRIGGER sync_auth_user_to_public_user
+AFTER INSERT OR UPDATE OF email, raw_user_meta_data, last_sign_in_at ON auth.users
+FOR EACH ROW
+EXECUTE FUNCTION private.sync_auth_user_to_public_user();
+
+INSERT INTO public.users (
+  id,
+  email,
+  full_name,
+  created_at,
+  last_login
+)
+SELECT
+  auth_users.id,
+  auth_users.email,
+  auth_users.raw_user_meta_data ->> 'full_name',
+  auth_users.created_at,
+  auth_users.last_sign_in_at
+FROM auth.users AS auth_users
+ON CONFLICT (id) DO UPDATE SET
+  email = EXCLUDED.email,
+  full_name = COALESCE(EXCLUDED.full_name, public.users.full_name),
+  last_login = EXCLUDED.last_login;
 
 CREATE TABLE IF NOT EXISTS job_descriptions (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
