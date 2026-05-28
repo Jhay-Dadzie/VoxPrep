@@ -135,8 +135,7 @@ class AuthService {
       });
 
       if (error) {
-        _error('Forgot password error:', error);
-        throw new Error(error.message || 'Failed to send password reset email');
+        warn(`Password reset request was not sent for ${email}: ${error.message}`);
       }
 
       return { message: 'If an account exists with this email, a password reset link will be sent' };
