@@ -19,7 +19,7 @@ export function getSupabaseClient() {
   return supabaseClient;
 }
 
-function getSupabaseClientForToken(accessToken) {
+export function getSupabaseClientForToken(accessToken) {
   const supabaseUrl = process.env.SUPABASE_URL
   const supabasePublishableKey = process.env.SUPABASE_PUBLISHABLE_KEY
 

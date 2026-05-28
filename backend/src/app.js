@@ -12,7 +12,6 @@ import 'dotenv/config'
 
 import { request, warn, error } from './core/errors/logger.js';
 import authRoutes from './modules/auth/auth.routes.js';
-import { protect, loginLimiter, signupLimiter, passwordLimiter } from './modules/auth/auth.middleware.js';
 
 const app = express();
 const PORT = process.env.PORT
@@ -91,13 +90,7 @@ app.get('/health', (req, res) => {
  * ============================================================================
  */
 
-// Apply rate limiting to specific auth endpoints
-app.post('/api/v1/auth/login', loginLimiter);
-app.post('/api/v1/auth/signup', signupLimiter);
-app.post('/api/v1/auth/forgot-password', passwordLimiter);
-app.post('/api/v1/auth/reset-password', passwordLimiter);
-
-// Register auth routes (already includes all endpoints)
+// Register auth routes (routes include endpoint-specific rate limiting)
 app.use('/api/v1/auth', authRoutes);
 
 /**

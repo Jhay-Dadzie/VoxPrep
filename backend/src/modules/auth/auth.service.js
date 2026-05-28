@@ -3,7 +3,7 @@
  * Optimized for: Email/Password only, basic login/signup/password-reset
  */
 
-import { getSupabaseClient, initializeUserProfile } from '../../config/supabase.js';
+import { getSupabaseClient, getSupabaseClientForToken, initializeUserProfile } from '../../config/supabase.js';
 import { error as _error, info, warn } from '../../core/errors/logger.js';
 
 class AuthService {
@@ -92,7 +92,8 @@ class AuthService {
       }
 
       const { user, session } = data;
-      const { data: userProfile } = await supabase
+      const userSupabase = getSupabaseClientForToken(session.access_token);
+      const { data: userProfile } = await userSupabase
         .from('users')
         .select('*')
         .eq('id', user.id)
@@ -125,9 +126,17 @@ class AuthService {
     }
   }
 
-  async logout(userId) {
+  async logout(accessToken, userId) {
     try {
-      await getSupabaseClient().auth.signOut();
+      if (!accessToken) {
+        throw new Error('Access token required');
+      }
+
+      const { error } = await getSupabaseClientForToken(accessToken).auth.signOut();
+
+      if (error) {
+        throw new Error(error.message || 'Logout failed');
+      }
 
       await this._logAudit({
         user_id: userId,
@@ -167,7 +176,7 @@ class AuthService {
     const supabase = getSupabaseClient();
 
     try {
-      const { error } = await supabase.auth.verifyOtp({
+      const { data, error } = await supabase.auth.verifyOtp({
         email,
         token,
         type: 'recovery',
@@ -178,7 +187,12 @@ class AuthService {
         throw new Error('Invalid or expired reset token');
       }
 
-      const { error: updateError } = await supabase.auth.updateUser({
+      if (!data.session?.access_token) {
+        throw new Error('Invalid or expired reset token');
+      }
+
+      const recoverySupabase = getSupabaseClientForToken(data.session.access_token);
+      const { error: updateError } = await recoverySupabase.auth.updateUser({
         password,
       });
 
@@ -205,7 +219,8 @@ class AuthService {
       }
 
       const authUser = data.user;
-      const { data: userProfile } = await supabase
+      const userSupabase = getSupabaseClientForToken(accessToken);
+      const { data: userProfile } = await userSupabase
         .from('users')
         .select('*')
         .eq('id', authUser.id)

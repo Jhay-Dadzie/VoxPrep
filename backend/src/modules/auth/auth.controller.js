@@ -55,164 +55,133 @@ class AuthController {
   /**
    * POST /auth/login
    */
-//   async login(req, res) {
-//     try {
-//       const { valid, errors, value } = validateInput(req.body, loginSchema);
-//       if (!valid) {
-//         return res.status(400).json({
-//           success: false,
-//           message: 'Validation failed',
-//           errors,
-//         });
-//       }
+  async login(req, res) {
+    try {
+      const { valid, errors, value } = validateInput(req.body, loginSchema);
+      if (!valid) {
+        return res.status(400).json({
+          success: false,
+          message: 'Validation failed',
+          errors,
+        });
+      }
 
-//       const { email, password } = value;
-//       const result = await _login({ email, password });
+      const { email, password } = value;
+      const result = await authService.login({ email, password });
 
-//       info(`User logged in: ${email}`);
+      info(`User logged in: ${email}`);
 
-//       return res.status(200).json({
-//         success: true,
-//         message: 'Login successful',
-//         data: {
-//           user: result.user,
-//           session: {
-//             access_token: result.session.access_token,
-//             token_type: result.session.token_type,
-//             expires_in: result.session.expires_in,
-//           },
-//         },
-//       });
-//     } catch (error) {
-//       _error('Login controller error:', error);
+      return res.status(200).json({
+        success: true,
+        message: 'Login successful',
+        data: {
+          user: result.user,
+          session: result.session,
+        },
+      });
+    } catch (error) {
+      _error('Login controller error:', error);
 
-//       return res.status(401).json({
-//         success: false,
-//         message: error.message || 'Login failed',
-//       });
-//     }
-//   }
+      return res.status(401).json({
+        success: false,
+        message: error.message || 'Login failed',
+      });
+    }
+  }
 
-//   /**
-//    * POST /auth/logout
-//    */
-//   async logout(req, res) {
-//     try {
-//       const userId = req.user?.id;
+  /**
+   * POST /auth/forgot-password
+   */
+  async forgotPassword(req, res) {
+    try {
+      const { valid, errors, value } = validateInput(req.body, forgotPasswordSchema);
+      if (!valid) {
+        return res.status(400).json({
+          success: false,
+          message: 'Validation failed',
+          errors,
+        });
+      }
 
-//       await _logout(userId);
+      const { email } = value;
+      const result = await authService.forgotPassword(email);
 
-//       return res.status(200).json({
-//         success: true,
-//         message: 'Logout successful',
-//       });
-//     } catch (error) {
-//       _error('Logout controller error:', error);
+      info(`Password reset requested for: ${email}`);
 
-//       return res.status(200).json({
-//         success: true,
-//         message: 'Logout completed',
-//       });
-//     }
-//   }
+      return res.status(200).json({
+        success: true,
+        message: result.message,
+      });
+    } catch (error) {
+      _error('Forgot password controller error:', error);
 
-//   /**
-//    * POST /auth/forgot-password
-//    */
-//   async forgotPassword(req, res) {
-//     try {
-//       const { valid, errors, value } = validateInput(req.body, forgotPasswordSchema);
-//       if (!valid) {
-//         return res.status(400).json({
-//           success: false,
-//           message: 'Validation failed',
-//           errors,
-//         });
-//       }
+      return res.status(500).json({
+        success: false,
+        message: error.message || 'Failed to process password reset request',
+      });
+    }
+  }
 
-//       const { email } = value;
-//       const result = await _forgotPassword(email);
+  /**
+   * POST /auth/reset-password
+   */
+  async resetPassword(req, res) {
+    try {
+      const { valid, errors, value } = validateInput(req.body, resetPasswordSchema);
+      if (!valid) {
+        return res.status(400).json({
+          success: false,
+          message: 'Validation failed',
+          errors,
+        });
+      }
 
-//       info(`Password reset requested for: ${email}`);
+      const { email, token, password } = value;
+      const result = await authService.resetPassword({ email, token, password });
 
-//       return res.status(200).json({
-//         success: true,
-//         message: result.message,
-//       });
-//     } catch (error) {
-//       _error('Forgot password controller error:', error);
+      info(`Password reset completed for: ${email}`);
 
-//       return res.status(500).json({
-//         success: false,
-//         message: error.message || 'Failed to process password reset request',
-//       });
-//     }
-//   }
+      return res.status(200).json({
+        success: true,
+        message: result.message,
+      });
+    } catch (error) {
+      _error('Reset password controller error:', error);
 
-//   /**
-//    * POST /auth/reset-password
-//    */
-//   async resetPassword(req, res) {
-//     try {
-//       const { valid, errors, value } = validateInput(req.body, resetPasswordSchema);
-//       if (!valid) {
-//         return res.status(400).json({
-//           success: false,
-//           message: 'Validation failed',
-//           errors,
-//         });
-//       }
+      return res.status(400).json({
+        success: false,
+        message: error.message || 'Password reset failed',
+      });
+    }
+  }
 
-//       const { email, token, password } = value;
-//       const result = await _resetPassword({ email, token, password });
+  /**
+   * POST /auth/logout
+   */
+  async logout(req, res) {
+    try {
+      const userId = req.user?.id;
+      const accessToken = req.token || req.headers.authorization?.split(' ')[1];
 
-//       info(`Password reset completed for: ${email}`);
+      await authService.logout(accessToken, userId);
 
-//       return res.status(200).json({
-//         success: true,
-//         message: result.message,
-//       });
-//     } catch (error) {
-//       _error('Reset password controller error:', error);
+      return res.status(200).json({
+        success: true,
+        message: 'Logout successful',
+      });
+    } catch (error) {
+      _error('Logout controller error:', error);
 
-//       return res.status(400).json({
-//         success: false,
-//         message: error.message || 'Password reset failed',
-//       });
-//     }
-//   }
+      return res.status(200).json({
+        success: true,
+        message: 'Logout completed',
+      });
+    }
+  }
 
   /**
    * GET /auth/me
    */
-  async login(req, res) {
-    return res.status(501).json({
-      success: false,
-      message: 'Login is not implemented',
-    });
-  }
-
-  async forgotPassword(req, res) {
-    return res.status(501).json({
-      success: false,
-      message: 'Forgot password is not implemented',
-    });
-  }
-
-  async resetPassword(req, res) {
-    return res.status(501).json({
-      success: false,
-      message: 'Reset password is not implemented',
-    });
-  }
-
-  async logout(req, res) {
-    return res.status(501).json({
-      success: false,
-      message: 'Logout is not implemented',
-    });
-  }
-
   async getCurrentUser(req, res) {
     try {
       const accessToken = req.headers.authorization?.split(' ')[1];
