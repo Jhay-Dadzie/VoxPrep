@@ -7,6 +7,30 @@ import authService from './auth.service.js';
 import { validateInput, signupSchema, loginSchema, forgotPasswordSchema, resetPasswordSchema } from './auth.validation.js';
 import { info, error as _error } from '../../core/errors/logger.js';
 
+const REFRESH_TOKEN_COOKIE = 'refresh_token';
+
+function setRefreshTokenCookie(res, refreshToken) {
+  if (!refreshToken) {
+    return;
+  }
+
+  res.cookie(REFRESH_TOKEN_COOKIE, refreshToken, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'lax',
+    path: '/',
+  });
+}
+
+function clearRefreshTokenCookie(res) {
+  res.clearCookie(REFRESH_TOKEN_COOKIE, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'lax',
+    path: '/',
+  });
+}
+
 class AuthController {
   /**
    * POST /auth/signup
@@ -26,11 +50,15 @@ class AuthController {
       const result = await authService.signup({ email, password, full_name });
 
       info(`New user registered: ${email}`);
+      setRefreshTokenCookie(res, result.session?.refresh_token);
 
       return res.status(201).json({
         success: true,
         message: result.message,
         data: {
+          id: result.user.id,
+          email: result.user.email,
+          full_name: result.user.full_name,
           user: result.user,
           session: result.session,
         },
@@ -70,6 +98,7 @@ class AuthController {
       const result = await authService.login({ email, password });
 
       info(`User logged in: ${email}`);
+      setRefreshTokenCookie(res, result.session?.refresh_token);
 
       return res.status(200).json({
         success: true,
@@ -277,6 +306,7 @@ class AuthController {
       const userId = req.user?.id;
 
       await authService.logout(userId);
+      clearRefreshTokenCookie(res);
 
       return res.status(200).json({
         success: true,
@@ -284,6 +314,7 @@ class AuthController {
       });
     } catch (error) {
       _error('Logout controller error:', error);
+      clearRefreshTokenCookie(res);
 
       return res.status(200).json({
         success: true,
