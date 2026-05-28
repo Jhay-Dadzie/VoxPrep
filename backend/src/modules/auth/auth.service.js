@@ -92,7 +92,8 @@ class AuthService {
       }
 
       const { user, session } = data;
-      const { data: userProfile } = await supabase
+      const userSupabase = getSupabaseClientForToken(session.access_token);
+      const { data: userProfile } = await userSupabase
         .from('users')
         .select('*')
         .eq('id', user.id)
@@ -125,29 +126,17 @@ class AuthService {
     }
   }
 
-  async forgotPassword(email) {
-    const supabase = getSupabaseClient();
-
+  async logout(accessToken, userId) {
     try {
-      const baseUrl = process.env.BACKEND_URL || process.env.API_BASE_URL || `http://localhost:${process.env.PORT || 3000}`;
-      const { error } = await supabase.auth.resetPasswordForEmail(email, {
-        redirectTo: `${baseUrl}/api/v1/auth/reset-password`,
-      });
-
-      if (error) {
-        warn(`Password reset request was not sent for ${email}: ${error.message}`);
+      if (!accessToken) {
+        throw new Error('Access token required');
       }
 
-      return { message: 'If an account exists with this email, a password reset link will be sent' };
-    } catch (error) {
-      _error('Forgot password service error:', error);
-      throw error;
-    }
-  }
+      const { error } = await getSupabaseClientForToken(accessToken).auth.signOut();
 
-  async logout(userId) {
-    try {
-      await getSupabaseClient().auth.signOut();
+      if (error) {
+        throw new Error(error.message || 'Logout failed');
+      }
 
       await this._logAudit({
         user_id: userId,
@@ -168,97 +157,45 @@ class AuthService {
     const supabase = getSupabaseClient();
 
     try {
-      if (access_token) {
-        if (!refresh_token) {
-          throw new Error('Reset link is missing a refresh token');
-        }
+      const { error } = await supabase.auth.resetPasswordForEmail(email, {
+        redirectTo: `${process.env.FRONTEND_URL}/reset-password`,
+      });
 
-        const recoveryClient = getSupabaseClientForToken(access_token);
-        const { error: sessionError } = await recoveryClient.auth.setSession({
-          access_token,
-          refresh_token,
-        });
-
-        if (sessionError) {
-          warn('Password reset session setup failed:', sessionError.message);
-          throw new Error('Invalid or expired reset link');
-        }
-
-        const { error: updateError } = await recoveryClient.auth.updateUser({
-          password,
-        });
-
-        if (updateError) {
-          _error('Password update error:', updateError);
-          throw new Error(updateError.message || 'Failed to update password');
-        }
-
-        return { message: 'Password reset successful. Please log in with your new password.' };
+      if (error) {
+        _error('Forgot password error:', error);
+        throw new Error(error.message || 'Failed to send password reset email');
       }
 
-      if (code) {
-        const { data, error: exchangeError } = await supabase.auth.exchangeCodeForSession(code);
+      return { message: 'If an account exists with this email, a password reset link will be sent' };
+    } catch (error) {
+      _error('Forgot password service error:', error);
+      throw error;
+    }
+  }
 
-        if (exchangeError) {
-          warn('Password reset code exchange failed:', exchangeError.message);
-          throw new Error('Invalid or expired reset link');
-        }
+  async resetPassword({ email, token, password }) {
+    const supabase = getSupabaseClient();
 
-        if (!data.session) {
-          throw new Error('Invalid or expired reset link');
-        }
+    try {
+      const { data, error } = await supabase.auth.verifyOtp({
+        email,
+        token,
+        type: 'recovery',
+      });
 
-        const { error: sessionError } = await supabase.auth.setSession({
-          access_token: data.session.access_token,
-          refresh_token: data.session.refresh_token,
-        });
-
-        if (sessionError) {
-          warn('Password reset session setup failed:', sessionError.message);
-          throw new Error('Invalid or expired reset link');
-        }
-
-        const { error: updateError } = await supabase.auth.updateUser({
-          password,
-        });
-
-        if (updateError) {
-          _error('Password update error:', updateError);
-          throw new Error(updateError.message || 'Failed to update password');
-        }
-
-        return { message: 'Password reset successful. Please log in with your new password.' };
+      if (error) {
+        warn('Password reset token verification failed:', error.message);
+        throw new Error('Invalid or expired reset token');
       }
 
-      if (email && token) {
-        const { data, error } = await supabase.auth.verifyOtp({
-          email,
-          token,
-          type: 'recovery',
-        });
+      if (!data.session?.access_token) {
+        throw new Error('Invalid or expired reset token');
+      }
 
-        if (error) {
-          warn('Password reset token verification failed:', error.message);
-          throw new Error('Invalid or expired reset token');
-        }
-
-        if (!data.session) {
-          throw new Error('Invalid or expired reset token');
-        }
-
-        const { error: sessionError } = await supabase.auth.setSession({
-          access_token: data.session.access_token,
-          refresh_token: data.session.refresh_token,
-        });
-
-        if (sessionError) {
-          warn('Password reset session setup failed:', sessionError.message);
-          throw new Error('Invalid or expired reset token');
-        }
-
-        const { error: updateError } = await supabase.auth.updateUser({
-          password,
-        });
+      const recoverySupabase = getSupabaseClientForToken(data.session.access_token);
+      const { error: updateError } = await recoverySupabase.auth.updateUser({
+        password,
+      });
 
         if (updateError) {
           _error('Password update error:', updateError);
@@ -286,7 +223,8 @@ class AuthService {
       }
 
       const authUser = data.user;
-      const { data: userProfile } = await supabase
+      const userSupabase = getSupabaseClientForToken(accessToken);
+      const { data: userProfile } = await userSupabase
         .from('users')
         .select('*')
         .eq('id', authUser.id)
