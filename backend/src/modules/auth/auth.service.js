@@ -152,8 +152,7 @@ class AuthService {
     }
   }
 
-
-  async resetPassword({ email, token, password, code, access_token, refresh_token }) {
+  async forgotPassword(email) {
     const supabase = getSupabaseClient();
 
     try {
@@ -197,15 +196,12 @@ class AuthService {
         password,
       });
 
-        if (updateError) {
-          _error('Password update error:', updateError);
-          throw new Error(updateError.message || 'Failed to update password');
-        }
-
-        return { message: 'Password reset successful. Please log in with your new password.' };
+      if (updateError) {
+        _error('Password update error:', updateError);
+        throw new Error(updateError.message || 'Failed to update password');
       }
 
-      throw new Error('Reset code, access token, or reset token is required');
+      return { message: 'Password reset successful. Please log in with your new password.' };
     } catch (error) {
       _error('Reset password error:', error);
       throw error;

@@ -61,11 +61,6 @@ router.post(
  * Reset password with token from email
  * Body: { email, token, password }
  */
-router.get(
-  '/reset-password',
-  asyncHandler(authController.showResetPassword.bind(authController))
-);
-
 router.post(
   '/reset-password',
   passwordLimiter,
