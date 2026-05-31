@@ -5,16 +5,43 @@
 
 import { getSupabaseClient, getSupabaseClientForToken, initializeUserProfile } from '../../config/supabase.js';
 import { error as _error, info, warn } from '../../core/errors/logger.js';
+import {
+  getCurrentTestUser,
+  getTestGoogleOAuthUrl,
+  loginTestUser,
+  logoutTestUser,
+  shouldUseTestAuth,
+  signupTestUser,
+  verifyTestEmail,
+} from './auth.store.js';
+
+function getBaseUrl(envKey, fallbackPort) {
+  const value = process.env[envKey]?.trim();
+  if (value) {
+    return value.replace(/\/+$/, '');
+  }
+
+  return `http://localhost:${process.env.PORT || fallbackPort}`;
+}
 
 class AuthService {
   /**
-   * Sign up a new user and return the Supabase session.
-   * Supabase only returns a session here when email confirmation is disabled.
+   * Sign up a new user.
+   * If email confirmation is enabled in Supabase, no session is returned.
    */
   async signup({ email, password, full_name }) {
-    const supabase = getSupabaseClient();
-
     try {
+      if (shouldUseTestAuth()) {
+        const result = signupTestUser({ email, password, full_name });
+        if (result.session) {
+          info(`User profile created for ${email}`);
+        } else {
+          info(`Signup pending verification for ${email}`);
+        }
+        return result;
+      }
+
+      const supabase = getSupabaseClient();
       const { data, error } = await supabase.auth.signUp({
         email,
         password,
@@ -36,12 +63,17 @@ class AuthService {
         throw new Error('User not created');
       }
 
+      // If email confirmation is required, session will be null
       if (!session) {
-        throw new Error(
-          'Signup created the user, but Supabase did not return a session. Disable email confirmation in Supabase Authentication settings to automatically sign users in after signup.'
-        );
+        info(`Signup pending verification for ${email}`);
+        return {
+          user: { id: user.id, email: user.email, full_name },
+          session: null,
+          message: 'Verification email sent. Please confirm your email address.',
+        };
       }
 
+      // Email confirmation disabled – create profile and return session
       try {
         await initializeUserProfile(user.id, email, full_name, session.access_token);
         info(`User profile created for ${email}`);
@@ -78,9 +110,12 @@ class AuthService {
   }
 
   async login({ email, password }) {
-    const supabase = getSupabaseClient();
-
     try {
+      if (shouldUseTestAuth()) {
+        return loginTestUser({ email, password });
+      }
+
+      const supabase = getSupabaseClient();
       const { data, error } = await supabase.auth.signInWithPassword({
         email,
         password,
@@ -88,16 +123,24 @@ class AuthService {
 
       if (error) {
         warn(`Login failed for ${email}: ${error.message}`);
+        if (error.message === 'Email not confirmed') {
+          throw new Error('Please verify your email address before logging in.');
+        }
         throw new Error(error.message || 'Invalid email or password');
       }
 
       const { user, session } = data;
-      const userSupabase = getSupabaseClientForToken(session.access_token);
-      const { data: userProfile } = await userSupabase
-        .from('users')
-        .select('*')
-        .eq('id', user.id)
-        .single();
+      let userProfile = null;
+
+      if (session?.access_token) {
+        const userSupabase = getSupabaseClientForToken(session.access_token);
+        const { data } = await userSupabase
+          .from('users')
+          .select('*')
+          .eq('id', user.id)
+          .single();
+        userProfile = data;
+      }
 
       await this._logAudit({
         user_id: user.id,
@@ -126,10 +169,89 @@ class AuthService {
     }
   }
 
+  /**
+   * Google OAuth – get the URL to redirect the user to
+   */
+  async googleSignIn() {
+    const redirectTo = `${getBaseUrl('BACKEND_URL', 3000)}/api/v1/auth/google/callback`;
+
+    if (shouldUseTestAuth()) {
+      return { url: getTestGoogleOAuthUrl(redirectTo) };
+    }
+
+    const supabase = getSupabaseClient();
+    const { data, error } = await supabase.auth.signInWithOAuth({
+      provider: 'google',
+      options: { redirectTo },
+    });
+    if (error) throw new Error(error.message);
+    return { url: data.url };
+  }
+
+  /**
+   * Exchange OAuth code for a session
+   */
+  async handleGoogleCallback(code) {
+    if (shouldUseTestAuth()) {
+      return this._handleTestGoogleCallback(code);
+    }
+
+    const supabase = getSupabaseClient();
+    const { data, error } = await supabase.auth.exchangeCodeForSession(code);
+    if (error) throw new Error(error.message);
+    const { user, session } = data;
+
+    // Ensure user profile exists
+    await initializeUserProfile(user.id, user.email, user.user_metadata?.full_name, session.access_token);
+
+    await this._logAudit({
+      user_id: user.id,
+      action: 'google_login',
+      resource_type: 'user',
+      resource_id: user.id,
+    });
+
+    return {
+      user: {
+        id: user.id,
+        email: user.email,
+        full_name: user.user_metadata?.full_name || null,
+      },
+      session: {
+        access_token: session.access_token,
+        refresh_token: session.refresh_token,
+        expires_in: session.expires_in,
+        expires_at: session.expires_at,
+        token_type: session.token_type,
+      },
+    };
+  }
+
+  /**
+   * Verify email using token from confirmation link
+   */
+  async verifyEmail(token) {
+    if (shouldUseTestAuth()) {
+      return verifyTestEmail(token);
+    }
+
+    const supabase = getSupabaseClient();
+    const { data, error } = await supabase.auth.verifyOtp({
+      token_hash: token,
+      type: 'signup',
+    });
+    if (error) throw new Error(error.message);
+    return { message: 'Email verified successfully' };
+  }
+
   async logout(accessToken, userId) {
     try {
       if (!accessToken) {
         throw new Error('Access token required');
+      }
+
+      if (shouldUseTestAuth()) {
+        return logoutTestUser(accessToken, userId);
       }
 
       const { error } = await getSupabaseClientForToken(accessToken).auth.signOut();
@@ -153,11 +275,15 @@ class AuthService {
   }
 
   async forgotPassword(email) {
-    const supabase = getSupabaseClient();
-
     try {
+      if (shouldUseTestAuth()) {
+        return { message: 'If an account exists with this email, a password reset link will be sent' };
+      }
+
+      const supabase = getSupabaseClient();
+      const redirectTo = `${getBaseUrl('FRONTEND_URL', 3000)}/reset-password`;
       const { error } = await supabase.auth.resetPasswordForEmail(email, {
-        redirectTo: `${process.env.FRONTEND_URL}/reset-password`,
+        redirectTo,
       });
 
       if (error) {
@@ -173,9 +299,12 @@ class AuthService {
   }
 
   async resetPassword({ email, token, password }) {
-    const supabase = getSupabaseClient();
-
     try {
+      if (shouldUseTestAuth()) {
+        return { message: 'Password reset successful. Please log in with your new password.' };
+      }
+
+      const supabase = getSupabaseClient();
       const { data, error } = await supabase.auth.verifyOtp({
         email,
         token,
@@ -209,9 +338,12 @@ class AuthService {
   }
 
   async getCurrentUser(accessToken) {
-    const supabase = getSupabaseClient();
-
     try {
+      if (shouldUseTestAuth()) {
+        return getCurrentTestUser(accessToken);
+      }
+
+      const supabase = getSupabaseClient();
       const { data, error } = await supabase.auth.getUser(accessToken);
 
       if (error) {
@@ -255,6 +387,27 @@ class AuthService {
     } catch (error) {
       warn('Failed to log audit trail:', error);
     }
+  }
+
+  async _handleTestGoogleCallback(code) {
+    if (!code) {
+      throw new Error('Missing authorization code');
+    }
+
+    return {
+      user: {
+        id: `google-${code}`,
+        email: `google-${code}@example.com`,
+        full_name: null,
+      },
+      session: {
+        access_token: `test-access.${code}`,
+        refresh_token: `test-refresh.${code}`,
+        expires_in: 3600,
+        expires_at: Math.floor(Date.now() / 1000) + 3600,
+        token_type: 'bearer',
+      },
+    };
   }
 }
 

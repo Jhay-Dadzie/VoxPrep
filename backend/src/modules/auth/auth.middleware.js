@@ -6,6 +6,7 @@
 import { getSupabaseClient } from '../../config/supabase.js';
 import { warn, error as _error } from '../../core/errors/logger.js';
 import authRateLimit, { ipKeyGenerator } from 'express-rate-limit';
+import { getCurrentTestUser, shouldUseTestAuth } from './auth.store.js';
 
 /**
  * Middleware to protect routes (requires valid JWT)
@@ -28,6 +29,25 @@ const protect = async (req, res, next) => {
         success: false,
         message: 'Invalid token format',
       });
+    }
+
+    if (shouldUseTestAuth()) {
+      try {
+        const user = getCurrentTestUser(token);
+        req.user = {
+          id: user.id,
+          email: user.email,
+        };
+        req.authUser = user;
+        req.token = token;
+        return next();
+      } catch (err) {
+        warn('Token verification failed:', err.message || 'Unknown error');
+        return res.status(401).json({
+          success: false,
+          message: 'Invalid or expired token',
+        });
+      }
     }
 
     // Verify token with Supabase
@@ -75,7 +95,6 @@ const signupLimiter = authRateLimit({
   skip: (req) => process.env.NODE_ENV === 'development',
 });
 
-
 const loginLimiter = authRateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: 100, // 100 attempts
@@ -85,7 +104,6 @@ const loginLimiter = authRateLimit({
   keyGenerator: (req) => req.body?.email || ipKeyGenerator(req.ip),
   skip: (req) => process.env.NODE_ENV === 'development',
 });
-
 
 const passwordLimiter = authRateLimit({
   windowMs: 60 * 60 * 1000, // 1 hour
