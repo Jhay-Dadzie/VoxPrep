@@ -111,6 +111,7 @@ export default function TabLayout() {
             <Tabs.Screen name="dashboard" options={{
                 title: "Dashboard",
                 tabBarIcon: ({color}) => <LayoutDashboard size={20} color={color}/>,
+                headerShown: false
             }}/>
             <Tabs.Screen name="practice" options={{
                 title: "Practice",
