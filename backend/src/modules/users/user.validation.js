@@ -66,12 +66,14 @@ const completeProfileSchema = Joi.object({}).strict().messages({
 /**
  * @param {object} data     - Request body / params
  * @param {Joi.Schema} schema
+ * @param {object} [options] - Joi validation options overrides
  * @returns {{ valid: boolean, errors: object|null, value: object|null }}
  */
-function validateInput(data, schema) {
+function validateInput(data, schema, options = {}) {
   const { error, value } = schema.validate(data, {
     abortEarly: false,
     stripUnknown: true,
+    ...options,
   });
 
   if (error) {

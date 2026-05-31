@@ -144,7 +144,9 @@ class UserController {
   async completeProfile(req, res) {
     try {
       // Validate body (must be empty; reject unexpected fields)
-      const { valid, errors } = validateInput(req.body ?? {}, completeProfileSchema);
+      const { valid, errors } = validateInput(req.body ?? {}, completeProfileSchema, {
+        stripUnknown: false,
+      });
       if (!valid) {
         return res.status(400).json({
           success: false,
