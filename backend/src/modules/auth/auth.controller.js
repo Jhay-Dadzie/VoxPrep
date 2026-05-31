@@ -46,10 +46,23 @@ class AuthController {
         });
       }
 
-      const { email, password, full_name } = value;
-      const result = await authService.signup({ email, password, full_name });
+      const { email, password, full_name, avatar_url } = value;
+      const result = await authService.signup({ email, password, full_name, avatar_url });
 
       info(`New user registered: ${email}`);
+
+      if (!result.session) {
+        // Email verification required
+        return res.status(201).json({
+          success: true,
+          message: result.message,
+          data: {
+            user: result.user,
+            session: null,
+          },
+        });
+      }
+
       setRefreshTokenCookie(res, result.session?.refresh_token);
 
       return res.status(201).json({
@@ -59,6 +72,7 @@ class AuthController {
           id: result.user.id,
           email: result.user.email,
           full_name: result.user.full_name,
+          avatar_url: result.user.avatar_url,
           user: result.user,
           session: result.session,
         },
@@ -98,6 +112,7 @@ class AuthController {
       const result = await authService.login({ email, password });
 
       info(`User logged in: ${email}`);
+      setRefreshTokenCookie(res, result.session?.refresh_token);
 
       return res.status(200).json({
         success: true,
@@ -114,6 +129,64 @@ class AuthController {
         success: false,
         message: error.message || 'Login failed',
       });
+    }
+  }
+
+  /**
+   * GET /auth/google
+   * Initiate Google OAuth
+   */
+  async googleAuth(req, res) {
+    try {
+      const { url } = await authService.googleSignIn();
+      return res.status(200).json({ success: true, url });
+    } catch (error) {
+      _error('Google OAuth init error:', error);
+      return res.status(500).json({ success: false, message: error.message });
+    }
+  }
+
+  /**
+   * GET /auth/google/callback
+   * Handle Google OAuth callback
+   */
+  async googleCallback(req, res) {
+    try {
+      const { code } = req.query;
+      if (!code) {
+        return res.status(400).json({ success: false, message: 'Missing authorization code' });
+      }
+      const result = await authService.handleGoogleCallback(code);
+      setRefreshTokenCookie(res, result.session?.refresh_token);
+      return res.status(200).json({
+        success: true,
+        message: 'Google login successful',
+        data: result,
+      });
+    } catch (error) {
+      _error('Google callback error:', error);
+      return res.status(401).json({ success: false, message: error.message });
+    }
+  }
+
+  /**
+   * GET /auth/verify-email
+   * Verify email using token from Supabase confirmation link
+   */
+  async verifyEmail(req, res) {
+    try {
+      const { token } = req.query;
+      if (!token) {
+        return res.status(400).json({ success: false, message: 'Verification token missing' });
+      }
+      const result = await authService.verifyEmail(token);
+      if (process.env.FRONTEND_URL) {
+        return res.redirect(`${process.env.FRONTEND_URL}/login?verified=true`);
+      }
+      return res.status(200).json({ success: true, message: result.message });
+    } catch (error) {
+      _error('Email verification error:', error);
+      return res.status(400).json({ success: false, message: error.message });
     }
   }
 
@@ -192,6 +265,7 @@ class AuthController {
       const accessToken = req.token || req.headers.authorization?.split(' ')[1];
 
       await authService.logout(accessToken, userId);
+      clearRefreshTokenCookie(res);
 
       return res.status(200).json({
         success: true,

@@ -9,12 +9,14 @@
  * - GET    /me (protected)
  * - POST   /forgot-password
  * - POST   /reset-password
+ * - GET    /google (OAuth init)
+ * - GET    /google/callback (OAuth callback)
+ * - GET    /verify-email (email confirmation)
  */
 
 import { Router } from 'express';
 const router = Router();
 import authController from './auth.controller.js';
-// import authController, { signup, login, forgotPassword, resetPassword, getCurrentUser, logout } from './auth.controller';
 import { signupLimiter, loginLimiter, passwordLimiter, protect } from './auth.middleware.js';
 
 const asyncHandler = (handler) => (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
@@ -25,7 +27,7 @@ const asyncHandler = (handler) => (req, res, next) => Promise.resolve(handler(re
 
 /**
  * POST /api/v1/auth/signup
- * Register new user (auto-confirmed)
+ * Register new user (email confirmation based on Supabase settings)
  * Body: { email, password, full_name? }
  */
 router.post(
@@ -66,6 +68,25 @@ router.post(
   passwordLimiter,
   asyncHandler(authController.resetPassword.bind(authController))
 );
+
+/**
+ * GET /api/v1/auth/google
+ * Initiate Google OAuth login
+ */
+router.get('/google', asyncHandler(authController.googleAuth.bind(authController)));
+
+/**
+ * GET /api/v1/auth/google/callback
+ * Google OAuth callback (handled by Supabase)
+ */
+router.get('/google/callback', asyncHandler(authController.googleCallback.bind(authController)));
+
+/**
+ * GET /api/v1/auth/verify-email
+ * Verify email address (called from Supabase confirmation link)
+ * Query: ?token=...
+ */
+router.get('/verify-email', asyncHandler(authController.verifyEmail.bind(authController)));
 
 /**
  * PROTECTED ENDPOINTS

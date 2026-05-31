@@ -34,6 +34,12 @@ const signupSchema = Joi.object({
     .messages({
       'string.max': 'Full name cannot exceed 255 characters',
     }),
+  avatar_url: Joi.string()
+    .max(2048)
+    .optional()
+    .messages({
+      'string.max': 'Avatar URL cannot exceed 2048 characters',
+    }),
 })
   .rename('fullName', 'full_name', { ignoreUndefined: true, override: false })
   .strict();
