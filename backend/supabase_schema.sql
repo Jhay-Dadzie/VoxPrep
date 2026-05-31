@@ -7,6 +7,8 @@ CREATE TABLE IF NOT EXISTS users (
   last_login TIMESTAMP WITH TIME ZONE,
   is_active BOOLEAN DEFAULT true,
   profile_completed BOOLEAN DEFAULT false,
+  avatar_url VARCHAR(255),
+  avatar_updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
   
   -- Indexes for performance
   CONSTRAINT email_valid CHECK (email ~ '^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}$')
