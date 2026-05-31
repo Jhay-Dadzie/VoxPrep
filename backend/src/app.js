@@ -13,6 +13,7 @@ import 'dotenv/config'
 import { request, warn, error } from './core/errors/logger.js';
 import authRoutes from './modules/auth/auth.routes.js';
 import userRoutes from './modules/users/user.routes.js'
+import jobDescriptionRoutes from './modules/jobDescription/jobDescription.routes.js'
 
 const app = express();
 const PORT = process.env.PORT
@@ -94,6 +95,7 @@ app.get('/health', (req, res) => {
 // Register auth routes (routes include endpoint-specific rate limiting)
 app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1/users', userRoutes)
+app.use('/api/v1/job-descriptions', jobDescriptionRoutes)
 
 /**
  * ============================================================================
