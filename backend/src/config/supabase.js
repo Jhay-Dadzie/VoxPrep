@@ -61,20 +61,35 @@ export function getSupabaseAdminClient() {
 // Called once after signup to upsert a row into the public `users` table.
 // Uses the user's own access token so RLS is respected on insert.
 
-export async function initializeUserProfile(id, email, full_name = null, accessToken = null, last_login = null) {
+export async function initializeUserProfile(id, email, full_name = null, accessToken = null, avatarUrl = null, last_login = null) {
   const supabase = accessToken
     ? getSupabaseClientForToken(accessToken)
     : getSupabaseClient();
 
-  const profile = { id, email, full_name: full_name || null, last_login };
+  const now = new Date().toISOString();
+  const avatarUpdatedAt = avatarUrl ? now : null;
 
+  const profile = {
+    id,
+    email,
+    full_name: full_name || null,
+    avatar_url: avatarUrl,
+    avatar_updated_at: avatarUpdatedAt,
+    last_login,
+    updated_at: now,
+  };
+
+  // If accessToken provided, try to update existing row first (e.g., Google login after email signup)
   if (accessToken) {
     const { data, error } = await supabase
       .from('users')
       .update({
         email: profile.email,
         full_name: profile.full_name,
+        avatar_url: profile.avatar_url,
+        avatar_updated_at: profile.avatar_updated_at,
         last_login: profile.last_login,
+        updated_at: profile.updated_at,
       })
       .eq('id', id)
       .select('id')
@@ -84,6 +99,7 @@ export async function initializeUserProfile(id, email, full_name = null, accessT
     if (data) return; // Row already existed and was updated — done
   }
 
+  // Insert new row (no accessToken or row didn't exist)
   const { error } = await supabase.from('users').insert([profile]);
   if (error) throw error;
 }

@@ -30,6 +30,9 @@ const updateProfileSchema = Joi.object({
     'string.min': 'Full name cannot be empty',
     'string.max': 'Full name cannot exceed 255 characters',
   }),
+  avatar_url: Joi.string().max(2048).optional().messages({
+    'string.max': 'Avatar URL cannot exceed 2048 characters',
+  }),
 })
   .min(1) // Reject completely empty payloads
   .messages({

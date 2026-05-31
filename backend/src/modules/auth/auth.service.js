@@ -3,7 +3,12 @@
  * Optimized for: Email/Password only, basic login/signup/password-reset
  */
 
-import { getSupabaseClient, getSupabaseClientForToken, initializeUserProfile } from '../../config/supabase.js';
+import {
+  getSupabaseAdminClient,
+  getSupabaseClient,
+  getSupabaseClientForToken,
+  initializeUserProfile,
+} from '../../config/supabase.js';
 import { error as _error, info, warn } from '../../core/errors/logger.js';
 import {
   getCurrentTestUser,
@@ -24,12 +29,18 @@ function getBaseUrl(envKey, fallbackPort) {
   return `http://localhost:${process.env.PORT || fallbackPort}`;
 }
 
+function generateRandomAvatarUrl(email, fullName) {
+  const name = encodeURIComponent(fullName || email.split('@')[0] || 'user');
+  // UI Avatars – free, consistent, no API key
+  return `https://ui-avatars.com/api/?name=${name}&background=random&size=128&bold=true`;
+}
+
 class AuthService {
   /**
    * Sign up a new user.
    * If email confirmation is enabled in Supabase, no session is returned.
    */
-  async signup({ email, password, full_name }) {
+  async signup({ email, password, full_name, avatar_url }) {
     try {
       if (shouldUseTestAuth()) {
         const result = signupTestUser({ email, password, full_name });
@@ -67,7 +78,7 @@ class AuthService {
       if (!session) {
         info(`Signup pending verification for ${email}`);
         return {
-          user: { id: user.id, email: user.email, full_name },
+          user: { id: user.id, email: user.email, full_name, avatar_url: avatar_url || null },
           session: null,
           message: 'Verification email sent. Please confirm your email address.',
         };
@@ -75,7 +86,8 @@ class AuthService {
 
       // Email confirmation disabled – create profile and return session
       try {
-        await initializeUserProfile(user.id, email, full_name, session.access_token);
+        const avatarUrl = avatar_url || generateRandomAvatarUrl(email, full_name);
+        await initializeUserProfile(user.id, email, full_name, session.access_token, avatarUrl);
         info(`User profile created for ${email}`);
       } catch (profileError) {
         _error(`Failed to create user profile for ${email}:`, profileError);
@@ -93,6 +105,7 @@ class AuthService {
           id: user.id,
           email: user.email,
           full_name,
+          avatar_url: avatar_url || generateRandomAvatarUrl(email, full_name),
         },
         session: {
           access_token: session.access_token,
@@ -154,6 +167,7 @@ class AuthService {
           id: user.id,
           email: user.email,
           full_name: userProfile?.full_name || null,
+          avatar_url: userProfile?.avatar_url || null,
         },
         session: {
           access_token: session.access_token,
@@ -202,7 +216,8 @@ class AuthService {
     const { user, session } = data;
 
     // Ensure user profile exists
-    await initializeUserProfile(user.id, user.email, user.user_metadata?.full_name, session.access_token);
+    const googleAvatar = user.user_metadata?.avatar_url || user.user_metadata?.picture || null;
+    await initializeUserProfile(user.id, user.email, user.user_metadata?.full_name, session.access_token, googleAvatar);
 
     await this._logAudit({
       user_id: user.id,
@@ -216,6 +231,7 @@ class AuthService {
         id: user.id,
         email: user.email,
         full_name: user.user_metadata?.full_name || null,
+        avatar_url: googleAvatar,
       },
       session: {
         access_token: session.access_token,
@@ -232,8 +248,8 @@ class AuthService {
    */
   async verifyEmail(token) {
     if (shouldUseTestAuth()) {
-      return verifyTestEmail(token);
-    }
+        return verifyTestEmail(token);
+      }
 
     const supabase = getSupabaseClient();
     const { data, error } = await supabase.auth.verifyOtp({
@@ -241,6 +257,27 @@ class AuthService {
       type: 'signup',
     });
     if (error) throw new Error(error.message);
+
+    // If email confirmation is enabled, create profile now with an avatar
+    // (only if not already created by some other flow)
+      const { user } = data;
+      const avatarUrl = generateRandomAvatarUrl(user.email, user.user_metadata?.full_name);
+      try {
+      // Use admin client because the user may not have an active session
+      const adminClient = getSupabaseAdminClient();
+      // Check if profile already exists
+      const { data: existing } = await adminClient
+        .from('users')
+        .select('id')
+        .eq('id', user.id)
+        .maybeSingle();
+      if (!existing) {
+        await initializeUserProfile(user.id, user.email, user.user_metadata?.full_name, null, avatarUrl);
+      }
+    } catch (err) {
+      warn('Failed to create user profile after email verification:', err);
+    }
+
     return { message: 'Email verified successfully' };
   }
 
@@ -362,6 +399,8 @@ class AuthService {
         id: authUser.id,
         email: authUser.email,
         full_name: userProfile?.full_name || null,
+        avatar_url: userProfile?.avatar_url || null,
+        avatar_updated_at: userProfile?.avatar_updated_at || null,
         created_at: userProfile?.created_at || null,
       };
     } catch (error) {
@@ -399,6 +438,7 @@ class AuthService {
         id: `google-${code}`,
         email: `google-${code}@example.com`,
         full_name: null,
+        avatar_url: null,
       },
       session: {
         access_token: `test-access.${code}`,

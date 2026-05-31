@@ -84,11 +84,16 @@ class UserService {
     }
   
     const supabase = getSupabaseClientForToken(accessToken);
+    const nextFields = { ...fields };
+
+    if (Object.prototype.hasOwnProperty.call(nextFields, 'avatar_url')) {
+      nextFields.avatar_updated_at = nextFields.avatar_url ? new Date().toISOString() : null;
+    }
   
     // Update public.users
     const { data, error } = await supabase
       .from(TABLE)
-      .update(fields)
+      .update(nextFields)
       .eq('id', userId)
       .select(PUBLIC_COLUMNS)
       .single();
@@ -134,7 +139,7 @@ class UserService {
       resource_type: 'user',
       resource_id: userId,
       details: {
-        updated_fields: Object.keys(fields),
+        updated_fields: Object.keys(nextFields),
       },
     });
   

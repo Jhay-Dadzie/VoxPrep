@@ -9,6 +9,11 @@ const sessionsByAccessToken = new Map();
 const sessionsByRefreshToken = new Map();
 const verificationTokensByValue = new Map();
 
+function generateTestAvatar(email) {
+  const name = encodeURIComponent(email.split('@')[0]);
+  return `https://ui-avatars.com/api/?name=${name}&background=random&size=128&bold=true`;
+}
+
 function createSession(userId) {
   const access_token = `test-access.${randomUUID()}`;
   const refresh_token = `test-refresh.${randomUUID()}`;
@@ -35,6 +40,7 @@ function toPublicUser(user) {
     id: user.id,
     email: user.email,
     full_name: user.full_name ?? null,
+    avatar_url: user.avatar_url ?? null,
   };
 }
 
@@ -49,14 +55,19 @@ export function signupTestUser({ email, password, full_name }) {
     throw new Error('User already registered');
   }
 
+  const avatarUrl = generateTestAvatar(normalizedEmail);
+  const now = new Date().toISOString();
+
   const user = {
     id: randomUUID(),
     email: normalizedEmail,
     password,
     full_name: full_name || null,
+    avatar_url: avatarUrl,
+    avatar_updated_at: !isEmailConfirmationEnabled ? now : null,
     email_confirmed: !isEmailConfirmationEnabled,
-    created_at: new Date().toISOString(),
-    updated_at: new Date().toISOString(),
+    created_at: now,
+    updated_at: now,
   };
 
   usersByEmail.set(normalizedEmail, user);
@@ -117,6 +128,8 @@ export function getCurrentTestUser(accessToken) {
     id: user.id,
     email: user.email,
     full_name: user.full_name,
+    avatar_url: user.avatar_url,
+    avatar_updated_at: user.avatar_updated_at,
     created_at: user.created_at,
   };
 }

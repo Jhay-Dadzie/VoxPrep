@@ -46,8 +46,8 @@ class AuthController {
         });
       }
 
-      const { email, password, full_name } = value;
-      const result = await authService.signup({ email, password, full_name });
+      const { email, password, full_name, avatar_url } = value;
+      const result = await authService.signup({ email, password, full_name, avatar_url });
 
       info(`New user registered: ${email}`);
 
@@ -72,6 +72,7 @@ class AuthController {
           id: result.user.id,
           email: result.user.email,
           full_name: result.user.full_name,
+          avatar_url: result.user.avatar_url,
           user: result.user,
           session: result.session,
         },

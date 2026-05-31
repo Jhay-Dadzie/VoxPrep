@@ -38,6 +38,8 @@ function toProfile(row) {
     id: row.id,
     email: row.email,
     full_name: row.full_name ?? null,
+    avatar_url: row.avatar_url ?? null,
+    avatar_updated_at: toISO(row.avatar_updated_at),
     is_active: row.is_active ?? true,
     profile_completed: row.profile_completed ?? false,
     last_login: toISO(row.last_login),
@@ -59,6 +61,7 @@ function toSummary(row) {
     id: row.id,
     email: row.email,
     full_name: row.full_name ?? null,
+    avatar_url: row.avatar_url ?? null,
   };
 }
 
