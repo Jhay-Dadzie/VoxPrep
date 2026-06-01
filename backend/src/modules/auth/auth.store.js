@@ -147,6 +147,43 @@ export function logoutTestUser(accessToken) {
   return { message: 'Logout successful' };
 }
 
+export function resetTestPassword({ email, token, code, access_token, password }) {
+  let user = null;
+
+  if (access_token) {
+    const session = sessionsByAccessToken.get(access_token);
+
+    if (!session) {
+      throw new Error('Invalid or expired reset token');
+    }
+
+    user = usersById.get(session.userId);
+  } else if (code) {
+    const userId = verificationTokensByValue.get(code);
+
+    if (userId) {
+      user = usersById.get(userId);
+      verificationTokensByValue.delete(code);
+    }
+  } else if (token && email) {
+    const candidate = usersByEmail.get(email.toLowerCase());
+
+    if (candidate && verificationTokensByValue.get(token) === candidate.id) {
+      user = candidate;
+      verificationTokensByValue.delete(token);
+    }
+  }
+
+  if (!user) {
+    throw new Error('Invalid or expired reset token');
+  }
+
+  user.password = password;
+  user.updated_at = new Date().toISOString();
+
+  return { message: 'Password reset successful. Please log in with your new password.' };
+}
+
 export function verifyTestEmail(token) {
   const userId = verificationTokensByValue.get(token);
 

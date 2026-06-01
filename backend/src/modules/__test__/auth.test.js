@@ -398,6 +398,53 @@ describe('Authentication API', () => {
     });
   });
 
+  describe('POST /api/v1/auth/reset-password', () => {
+    it('should reset a password with a recovery access token', async () => {
+      if (isEmailVerificationEnabled) return;
+
+      const newPassword = 'UpdatedPassword123!';
+      const loginRes = await request(app)
+        .post('/api/v1/auth/login')
+        .send({
+          email: testUser.email,
+          password: testUser.password,
+        });
+
+      expect(loginRes.status).toBe(200);
+
+      const res = await request(app)
+        .post('/api/v1/auth/reset-password')
+        .send({
+          access_token: loginRes.body.data.session.access_token,
+          password: newPassword,
+        });
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+
+      const oldPasswordRes = await request(app)
+        .post('/api/v1/auth/login')
+        .send({
+          email: testUser.email,
+          password: testUser.password,
+        });
+
+      expect(oldPasswordRes.status).toBe(401);
+
+      const newPasswordRes = await request(app)
+        .post('/api/v1/auth/login')
+        .send({
+          email: testUser.email,
+          password: newPassword,
+        });
+
+      expect(newPasswordRes.status).toBe(200);
+      expect(newPasswordRes.body.success).toBe(true);
+
+      testUser.password = newPassword;
+    });
+  });
+
   /**
    * ============================================================================
    * HEALTH CHECK TESTS

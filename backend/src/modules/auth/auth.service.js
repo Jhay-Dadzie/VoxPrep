@@ -17,6 +17,7 @@ import {
   logoutTestUser,
   shouldUseTestAuth,
   signupTestUser,
+  resetTestPassword,
   verifyTestEmail,
 } from './auth.store.js';
 
@@ -335,29 +336,47 @@ class AuthService {
     }
   }
 
-  async resetPassword({ email, token, password }) {
+  async resetPassword({ email, token, code, access_token, password }) {
     try {
       if (shouldUseTestAuth()) {
-        return { message: 'Password reset successful. Please log in with your new password.' };
+        return resetTestPassword({ email, token, code, access_token, password });
       }
 
-      const supabase = getSupabaseClient();
-      const { data, error } = await supabase.auth.verifyOtp({
-        email,
-        token,
-        type: 'recovery',
-      });
+      let recoveryAccessToken = access_token;
 
-      if (error) {
-        warn('Password reset token verification failed:', error.message);
+      if (!recoveryAccessToken && code) {
+        const supabase = getSupabaseClient();
+        const { data, error } = await supabase.auth.exchangeCodeForSession(code);
+
+        if (error || !data.session?.access_token) {
+          warn('Password reset code exchange failed:', error?.message || 'Missing recovery session');
+          throw new Error('Invalid or expired reset token');
+        }
+
+        recoveryAccessToken = data.session.access_token;
+      }
+
+      if (!recoveryAccessToken && token) {
+        const supabase = getSupabaseClient();
+        const { data, error } = await supabase.auth.verifyOtp({
+          email,
+          token,
+          type: 'recovery',
+        });
+
+        if (error || !data.session?.access_token) {
+          warn('Password reset token verification failed:', error?.message || 'Missing recovery session');
+          throw new Error('Invalid or expired reset token');
+        }
+
+        recoveryAccessToken = data.session.access_token;
+      }
+
+      if (!recoveryAccessToken) {
         throw new Error('Invalid or expired reset token');
       }
 
-      if (!data.session?.access_token) {
-        throw new Error('Invalid or expired reset token');
-      }
-
-      const recoverySupabase = getSupabaseClientForToken(data.session.access_token);
+      const recoverySupabase = getSupabaseClientForToken(recoveryAccessToken);
       const { error: updateError } = await recoverySupabase.auth.updateUser({
         password,
       });

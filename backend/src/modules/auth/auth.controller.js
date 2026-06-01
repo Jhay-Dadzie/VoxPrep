@@ -237,10 +237,16 @@ class AuthController {
         });
       }
 
-      const { email, token, password } = value;
-      const result = await authService.resetPassword({ email, token, password });
+      const { email, token, code, access_token, password } = value;
+      const result = await authService.resetPassword({
+        email,
+        token,
+        code,
+        access_token,
+        password,
+      });
 
-      info(`Password reset completed for: ${email}`);
+      info(`Password reset completed${email ? ` for: ${email}` : ''}`);
 
       return res.status(200).json({
         success: true,
