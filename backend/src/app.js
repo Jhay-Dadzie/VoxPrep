@@ -14,6 +14,7 @@ import { request, warn, error } from './core/errors/logger.js';
 import authRoutes from './modules/auth/auth.routes.js';
 import userRoutes from './modules/users/user.routes.js'
 import jobDescriptionRoutes from './modules/jobDescription/jobDescription.routes.js'
+import interviewSessionsRoutes from './modules/interviews/interview.routes.js'
 
 const app = express();
 const PORT = process.env.PORT
@@ -96,6 +97,7 @@ app.get('/health', (req, res) => {
 app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1/users', userRoutes)
 app.use('/api/v1/job-descriptions', jobDescriptionRoutes)
+app.use('/api/v1/interviews', interviewSessionsRoutes)
 
 /**
  * ============================================================================
@@ -106,32 +108,6 @@ app.use('/api/v1/job-descriptions', jobDescriptionRoutes)
 // Example structure for other protected routes:
 // These would be your job descriptions, interviews, etc.
 
-// Placeholder for user routes
-// app.get('/api/v1/users/profile', protect, (req, res) => {
-//   res.json({
-//     success: true,
-//     message: 'User profile endpoint',
-//     user: req.user,
-//   });
-// });
-
-// Placeholder for job descriptions routes
-// app.get('/api/v1/job-descriptions', protect, (req, res) => {
-//   res.json({
-//     success: true,
-//     message: 'Job descriptions endpoint',
-//     userId: req.user.id,
-//   });
-// });
-
-// Placeholder for interviews routes
-// app.get('/api/v1/interviews', protect, (req, res) => {
-//   res.json({
-//     success: true,
-//     message: 'Interviews endpoint',
-//     userId: req.user.id,
-//   });
-// });
 
 /**
  * ============================================================================
