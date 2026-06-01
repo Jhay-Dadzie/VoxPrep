@@ -36,6 +36,57 @@ function generateRandomAvatarUrl(email, fullName) {
 }
 
 class AuthService {
+  async _getOAuthLoginHint(email) {
+    if (!email || shouldUseTestAuth()) {
+      return null;
+    }
+
+    try {
+      const adminClient = getSupabaseAdminClient();
+      const normalizedEmail = email.trim().toLowerCase();
+      const pageSize = 100;
+
+      for (let page = 1; page < 100; page += 1) {
+        const { data, error } = await adminClient.auth.admin.listUsers({
+          page,
+          perPage: pageSize,
+        });
+
+        if (error) {
+          warn(`Failed to inspect auth user for ${email}:`, error);
+          return null;
+        }
+
+        const users = Array.isArray(data?.users) ? data.users : Array.isArray(data) ? data : [];
+        const matchedUser = users.find(
+          (user) => user.email?.trim().toLowerCase() === normalizedEmail,
+        );
+
+        if (matchedUser) {
+          const providers = Array.isArray(matchedUser.app_metadata?.providers)
+            ? matchedUser.app_metadata.providers
+            : [];
+          const primaryProvider = matchedUser.app_metadata?.provider || null;
+          const hasPasswordIdentity = providers.includes('email') || primaryProvider === 'email';
+
+          if (!hasPasswordIdentity) {
+            return 'This account was created with Google. Please sign in with Google instead of email and password.';
+          }
+
+          return null;
+        }
+
+        if (users.length < pageSize) {
+          return null;
+        }
+      }
+    } catch (error) {
+      warn(`Failed to determine login provider for ${email}:`, error);
+    }
+
+    return null;
+  }
+
   /**
    * Sign up a new user.
    * If email confirmation is enabled in Supabase, no session is returned.
@@ -138,6 +189,12 @@ class AuthService {
         warn(`Login failed for ${email}: ${error.message}`);
         if (error.message === 'Email not confirmed') {
           throw new Error('Please verify your email address before logging in.');
+        }
+        if (error.message === 'Invalid login credentials') {
+          const oauthHint = await this._getOAuthLoginHint(email);
+          if (oauthHint) {
+            throw new Error(oauthHint);
+          }
         }
         throw new Error(error.message || 'Invalid email or password');
       }
