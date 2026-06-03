@@ -338,6 +338,7 @@ jest.unstable_mockModule('../interviews/interview.service.js', () => ({
   getInterviewSessions: jest.fn(),
   getInterviewSessionById: jest.fn(),
   addQuestionToSession: jest.fn(),
+  generateSessionQuestions: jest.fn(),
   submitAnswer: jest.fn()
 }));
 
@@ -366,6 +367,7 @@ describe('InterviewSession Controller', () => {
     service.getInterviewSessions = jest.fn();
     service.getInterviewSessionById = jest.fn();
     service.addQuestionToSession = jest.fn();
+    service.generateSessionQuestions = jest.fn();
     service.submitAnswer = jest.fn();
   });
 
@@ -510,17 +512,22 @@ describe('InterviewSession Controller', () => {
   });
 
   describe('addQuestion controller', () => {
-    it('should return 201 with question data', async () => {
-      const req = mockReq({ id: 'sess-1' }, {}, { question_text: 'New question?', question_type: 'technical' });
+    it('should return 201 with generated question data', async () => {
+      const req = mockReq({ id: 'sess-1' }, {}, { questionCount: 2 });
       const res = mockRes();
       const next = jest.fn();
-      const mockQuestion = { id: 'q1', question_text: 'New question?', question_number: 1 };
-      service.addQuestionToSession.mockResolvedValue(mockQuestion);
+      const mockQuestions = [
+        { id: 'q1', question_text: 'New question?', question_number: 1, question_type: 'technical', difficulty_level: 'medium' }
+      ];
+      service.generateSessionQuestions.mockResolvedValue(mockQuestions);
       await controller.addQuestion(req, res, next);
       expect(res.status).toHaveBeenCalledWith(201);
       expect(res.json).toHaveBeenCalledWith({
         status: 'success',
-        data: expect.objectContaining({ id: 'q1', question_text: 'New question?' })
+        message: 'Questions generated successfully',
+        data: expect.arrayContaining([
+          expect.objectContaining({ id: 'q1', questionText: 'New question?' })
+        ])
       });
     });
   });
