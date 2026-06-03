@@ -1,4 +1,5 @@
 import { getSupabaseAdminClient } from '../../config/supabase.js';
+import { createSessionQuestions } from '../questions/question.service.js';
 
 let supabase;
 
@@ -282,6 +283,26 @@ export const addQuestionToSession = async (sessionId, userId, questionData) => {
   return data;
 };
 
+export const generateSessionQuestions = async (sessionId, userId, options = {}) => {
+  const supabase = getSupabase();
+
+  const { data: session, error: sessionError } = await supabase
+    .from('interview_sessions')
+    .select('id, user_id')
+    .eq('id', sessionId)
+    .eq('user_id', userId)
+    .single();
+
+  if (sessionError || !session) throw new Error('Session not found or access denied');
+
+  return createSessionQuestions(sessionId, {
+    supabaseClient: supabase,
+    userId,
+    jobData: options.jobData || null,
+    questionCount: options.questionCount || 10
+  });
+};
+
 export const submitAnswer = async (sessionId, questionId, userId, answerData) => {
   const supabase = getSupabase();
 
@@ -362,5 +383,6 @@ export default {
   getInterviewSessions,
   getInterviewSessionById,
   addQuestionToSession,
+  generateSessionQuestions,
   submitAnswer
 };

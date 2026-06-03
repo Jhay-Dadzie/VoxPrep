@@ -12,6 +12,7 @@ import {
   mapSessionListToResponse,
   mapSessionDetailToResponse
 } from './interview.mapper.js';
+import { mapQuestion } from '../questions/question.mapper.js';
 
 export const createInterviewSession = asyncHandler(async (req, res, next) => {
   const { error, value } = createSessionValidation.validate(req.body);
@@ -90,7 +91,7 @@ export const deleteSession = asyncHandler(async (req, res, next) => {
 });
 
 // ─────────────────────────────────────────────────────────────────
-// Question & Answer (Manual)
+// AI Question Generation
 // ─────────────────────────────────────────────────────────────────
 
 export const addQuestion = asyncHandler(async (req, res, next) => {
@@ -99,16 +100,11 @@ export const addQuestion = asyncHandler(async (req, res, next) => {
   const { error, value } = addQuestionValidation.validate(req.body);
   if (error) return next(new AppError(error.details[0].message, 400));
 
-  const question = await service.addQuestionToSession(sessionId, userId, value);
+  const questions = await service.generateSessionQuestions(sessionId, userId, value);
   res.status(201).json({
     status: 'success',
-    data: {
-      id: question.id,
-      question_text: question.question_text,
-      question_number: question.question_number,
-      question_type: question.question_type,
-      difficulty_level: question.difficulty_level
-    }
+    message: 'Questions generated successfully',
+    data: questions.map(mapQuestion)
   });
 });
 

@@ -27,7 +27,7 @@ router.post('/:id/continue', continueSession);
 router.post('/:id/complete', completeSession);
 router.delete('/:id', deleteSession);
 
-// Questions & Answers (manual, no AI)
+// Questions & Answers (AI-generated questions)
 router.post('/:id/questions', addQuestion);
 router.post('/:sessionId/questions/:questionId/answer', submitAnswer);
 

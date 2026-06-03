@@ -24,6 +24,7 @@ export const mapQuestionWithResponse = (question) => {
     difficulty_level: question.difficulty_level,
     ideal_answer_guidelines: question.ideal_answer_guidelines,
     generated_at: question.generated_at,
+    ai_model_used: question.ai_model_used,
     response: response ? {
       id: response.id,
       transcribed_text: response.transcribed_text,

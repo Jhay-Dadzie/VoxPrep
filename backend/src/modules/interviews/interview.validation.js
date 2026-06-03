@@ -12,11 +12,22 @@ export const getSessionsQueryValidation = Joi.object({
   search: Joi.string().trim().optional().allow('')
 });
 
+const jobDataSchema = Joi.object({
+  title: Joi.string().min(2).max(100).required(),
+  company_name: Joi.string().allow('', null).optional(),
+  job_content: Joi.string().min(50).required().messages({
+    'string.min': 'Job content is too short to generate meaningful questions (min 50 chars)',
+  }),
+  key_skills: Joi.array().items(Joi.string().trim().min(1)).optional(),
+  required_experience_level: Joi.string()
+    .valid('entry', 'junior', 'mid', 'senior', 'lead')
+    .optional(),
+  industry: Joi.string().max(100).optional().allow('', null),
+}).optional();
+
 export const addQuestionValidation = Joi.object({
-  question_text: Joi.string().trim().min(5).required(),
-  question_type: Joi.string().valid('behavioral', 'technical', 'situational', 'general').default('general'),
-  difficulty_level: Joi.string().valid('easy', 'medium', 'hard').default('medium'),
-  ideal_answer_guidelines: Joi.string().optional().allow(null, '')
+  questionCount: Joi.number().integer().min(1).max(20).default(10),
+  jobData: jobDataSchema,
 });
 
 export const submitAnswerValidation = Joi.object({
