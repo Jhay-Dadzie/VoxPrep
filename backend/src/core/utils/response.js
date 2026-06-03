@@ -1,7 +1,7 @@
 /**
  * Standardized API Response Helper
  */
-const successResponse = (res, data = null, message = 'Success', statusCode = 200) => {
+export const successResponse = (res, data = null, message = 'Success', statusCode = 200) => {
   return res.status(statusCode).json({
     status: 'success',
     message,
@@ -9,7 +9,7 @@ const successResponse = (res, data = null, message = 'Success', statusCode = 200
   });
 };
 
-const errorResponse = (res, message = 'Error', statusCode = 500, errors = null) => {
+export const errorResponse = (res, message = 'Error', statusCode = 500, errors = null) => {
   return res.status(statusCode).json({
     status: 'error',
     message,
