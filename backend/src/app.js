@@ -16,6 +16,7 @@ import userRoutes from './modules/users/user.routes.js'
 import jobDescriptionRoutes from './modules/jobDescription/jobDescription.routes.js'
 import interviewSessionsRoutes from './modules/interviews/interview.routes.js'
 import questionRoutes from './modules/questions/question.routes.js'
+import responseRoutes from './modules/responses/response.routes.js'
 
 const app = express();
 const PORT = process.env.PORT
@@ -100,6 +101,7 @@ app.use('/api/v1/users', userRoutes)
 app.use('/api/v1/job-descriptions', jobDescriptionRoutes)
 app.use('/api/v1/interviews', interviewSessionsRoutes)
 app.use('/api/v1/questions', questionRoutes)
+app.use('/api/v1/responses', responseRoutes)
 
 /**
  * ============================================================================
