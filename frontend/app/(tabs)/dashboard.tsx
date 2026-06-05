@@ -16,9 +16,15 @@ export default function Dashboard() {
   const [empty, setEmpty] = useState(false)
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: colors.background }} edges={['top']}>
+    <SafeAreaView style={{ flex: 1, backgroundColor: colors.card }} edges={['top']}>
       <View style={[styles.header, { backgroundColor: colors.card, borderBottomColor: colors.border }]}>
-        <Image source={{ uri: AVATAR }} style={styles.avatar} />
+        {empty ? (
+          <Pressable onPress={() => setEmpty(false)} hitSlop={10} style={styles.backBtn}>
+            <Ionicons name="chevron-back" size={22} color={colors.tint} />
+          </Pressable>
+        ) : (
+          <Image source={{ uri: AVATAR }} style={styles.avatar} />
+        )}
         <ThemedText style={[styles.brand, { color: colors.tint }]}>VoxPrep</ThemedText>
         <View style={{ flex: 1 }} />
         <Pressable onPress={() => setEmpty(!empty)} hitSlop={10}>
@@ -26,7 +32,7 @@ export default function Dashboard() {
         </Pressable>
       </View>
 
-      <ScrollView contentContainerStyle={{ padding: 20, paddingBottom: 32 }} showsVerticalScrollIndicator={false}>
+      <ScrollView style={{ backgroundColor: colors.background }} contentContainerStyle={{ padding: 20, paddingBottom: 32 }} showsVerticalScrollIndicator={false}>
         {!empty && (
           <>
             <ThemedText style={[styles.welcomeTag, { color: colors.muted }]}>WELCOME BACK,</ThemedText>
@@ -51,7 +57,7 @@ export default function Dashboard() {
           ) : (
             <>
               <ThemedText style={styles.heroTitle}>Ready for your next interview?</ThemedText>
-              <Pressable style={[styles.heroBtn, { backgroundColor: colors.card }]} onPress={() => router.push('/(tabs)/practice')}>
+              <Pressable style={[styles.heroBtn, { backgroundColor: colors.card }]} onPress={() => setEmpty(true)}>
                 <ThemedText style={[styles.heroBtnText, { color: colors.tint }]}>Start Practice Session</ThemedText>
                 <Ionicons name="play-circle" size={18} color={colors.tint} />
               </Pressable>
@@ -60,15 +66,27 @@ export default function Dashboard() {
         </LinearGradient>
 
         {empty ? (
-          <View style={[styles.emptyCard, { backgroundColor: colors.card }]}>
-            <View style={[styles.emptyIcon, { backgroundColor: colors.brandSoft }]}>
-              <Ionicons name="mic" size={22} color={colors.tint} />
+          <>
+            <View style={[styles.emptyCard, { backgroundColor: colors.card }]}>
+              <View style={[styles.emptyIcon, { backgroundColor: colors.brandSoft }]}>
+                <Ionicons name="mic" size={22} color={colors.tint} />
+              </View>
+              <ThemedText style={[styles.emptyTitle, { color: colors.oppositeColor }]}>No interview history yet</ThemedText>
+              <ThemedText style={[styles.emptyBody, { color: colors.subtext }]}>
+                Your practice sessions and AI insights will appear here once you start. Set up your profile and get ready to talk.
+              </ThemedText>
             </View>
-            <ThemedText style={[styles.emptyTitle, { color: colors.oppositeColor }]}>No interview history yet</ThemedText>
-            <ThemedText style={[styles.emptyBody, { color: colors.subtext }]}>
-              Your practice sessions and AI insights will appear here once you start. Set up your profile and get ready to talk.
-            </ThemedText>
-          </View>
+
+            <View style={[styles.tipCard, { backgroundColor: colors.brandSoft, borderColor: colors.border }]}>
+              <View style={styles.tipHeader}>
+                <Ionicons name="bulb" size={16} color={colors.warning} />
+                <ThemedText style={[styles.tipTitle, { color: colors.oppositeColor }]}>Pro Tip</ThemedText>
+              </View>
+              <ThemedText style={[styles.tipBody, { color: colors.subtext }]}>
+                Practice with a specific job description. Paste it before your session to get tailored questions directly relevant to your target role.
+              </ThemedText>
+            </View>
+          </>
         ) : (
           <>
             <View style={styles.statsRow}>
@@ -142,6 +160,7 @@ function SessionRow({ icon, title, meta, score, tone, colors }: any) {
 const styles = StyleSheet.create({
   header: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20, paddingVertical: 12, borderBottomWidth: 1 },
   avatar: { width: 36, height: 36, borderRadius: 18, marginRight: 10 },
+  backBtn: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center', marginRight: 10 },
   brand: { fontWeight: '700', fontSize: 17 },
 
   welcomeTag: { fontSize: 11, fontWeight: '600', letterSpacing: 1 },
@@ -176,4 +195,9 @@ const styles = StyleSheet.create({
   emptyIcon: { width: 52, height: 52, borderRadius: 26, alignItems: 'center', justifyContent: 'center', marginBottom: 14 },
   emptyTitle: { fontWeight: '700', fontSize: 17, marginBottom: 8 },
   emptyBody: { fontSize: 13, lineHeight: 19, textAlign: 'center' },
+
+  tipCard: { borderRadius: 12, padding: 16, borderWidth: 1 },
+  tipHeader: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 6 },
+  tipTitle: { fontWeight: '700' },
+  tipBody: { fontSize: 13, lineHeight: 19 },
 })
