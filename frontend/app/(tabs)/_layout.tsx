@@ -96,16 +96,7 @@ export default function TabLayout() {
         <Tabs
             tabBar={props => <CustomTabBar {...props} />}
             screenOptions={{
-                headerStyle: {
-                    backgroundColor: colors.background,
-                    borderBottomWidth: 1,
-                    borderBottomColor: colors.border,
-                    shadowColor: '#000',
-                    shadowOffset: { width: 0, height: 7 },
-                    shadowOpacity: 0.05,
-                    shadowRadius: 4,
-                    elevation: 5
-                }
+                headerShown: false,
             }}
         >
             <Tabs.Screen name="dashboard" options={{
