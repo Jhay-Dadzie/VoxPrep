@@ -1,11 +1,19 @@
 import { getSupabaseAdminClient } from '../../config/supabase.js';
 import { createSessionQuestions } from '../questions/question.service.js';
+import audioService from '../speech/audio.service.js';
 
 let supabase;
 
 const getSupabase = () => {
   if (!supabase) supabase = getSupabaseAdminClient();
   return supabase;
+};
+
+const resolveOriginalAudioUrl = async (answerData) => {
+  if (answerData.original_audio_url) return answerData.original_audio_url;
+  if (answerData.audio_url) return answerData.audio_url;
+  if (answerData.storage_path) return audioService.getSignedUrl(answerData.storage_path);
+  return null;
 };
 
 // ─────────────────────────────────────────────────────────────────
@@ -305,6 +313,7 @@ export const generateSessionQuestions = async (sessionId, userId, options = {}) 
 
 export const submitAnswer = async (sessionId, questionId, userId, answerData) => {
   const supabase = getSupabase();
+  const originalAudioUrl = await resolveOriginalAudioUrl(answerData);
 
   // Verify question belongs to session and session belongs to user, session not completed
   const { data: question, error: qError } = await supabase
@@ -331,7 +340,7 @@ export const submitAnswer = async (sessionId, questionId, userId, answerData) =>
       .from('user_responses')
       .update({
         transcribed_text: answerData.answer_text,
-        original_audio_url: answerData.audio_url || null,
+        original_audio_url: originalAudioUrl,
         response_duration_seconds: answerData.response_duration_seconds || null,
         transcription_confidence: answerData.transcription_confidence || null,
         response_created_at: new Date().toISOString()
@@ -349,7 +358,7 @@ export const submitAnswer = async (sessionId, questionId, userId, answerData) =>
         session_id: sessionId,
         user_id: userId,
         transcribed_text: answerData.answer_text,
-        original_audio_url: answerData.audio_url || null,
+        original_audio_url: originalAudioUrl,
         response_duration_seconds: answerData.response_duration_seconds || null,
         transcription_confidence: answerData.transcription_confidence || null
       })
