@@ -30,6 +30,15 @@ const submitResponseSchema = Joi.object({
     'string.max': 'Audio URL cannot exceed 2048 characters',
   }),
 
+  audio_url: Joi.string().uri().max(2048).optional().allow(null, '').messages({
+    'string.uri': 'Audio URL must be a valid URI',
+    'string.max': 'Audio URL cannot exceed 2048 characters',
+  }),
+
+  storage_path: Joi.string().trim().max(2048).optional().allow(null, '').messages({
+    'string.max': 'Storage path cannot exceed 2048 characters',
+  }),
+
   response_duration_seconds: Joi.number()
     .integer()
     .min(0)
@@ -72,6 +81,15 @@ const updateResponseSchema = Joi.object({
   original_audio_url: Joi.string().uri().max(2048).optional().allow(null, '').messages({
     'string.uri': 'Audio URL must be a valid URI',
     'string.max': 'Audio URL cannot exceed 2048 characters',
+  }),
+
+  audio_url: Joi.string().uri().max(2048).optional().allow(null, '').messages({
+    'string.uri': 'Audio URL must be a valid URI',
+    'string.max': 'Audio URL cannot exceed 2048 characters',
+  }),
+
+  storage_path: Joi.string().trim().max(2048).optional().allow(null, '').messages({
+    'string.max': 'Storage path cannot exceed 2048 characters',
   }),
 
   response_duration_seconds: Joi.number()
