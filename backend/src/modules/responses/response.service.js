@@ -20,6 +20,7 @@
  */
 
 import { getSupabaseAdminClient } from '../../config/supabase.js';
+import audioService from '../speech/audio.service.js';
 import { error as _error, info, warn } from '../../core/errors/logger.js';
 
 // ─── Table names ──────────────────────────────────────────────────────────────
@@ -126,10 +127,11 @@ class ResponseService {
       .maybeSingle();
 
     const now = new Date().toISOString();
+    const originalAudioUrl = await this._resolveOriginalAudioUrl(responseData);
 
     const payload = {
       transcribed_text: responseData.transcribed_text,
-      original_audio_url: responseData.original_audio_url ?? null,
+      original_audio_url: originalAudioUrl,
       response_duration_seconds: responseData.response_duration_seconds ?? null,
       transcription_confidence: responseData.transcription_confidence ?? null,
       response_created_at: now,
@@ -215,10 +217,19 @@ class ResponseService {
       throw new Error('Cannot edit a response that belongs to a completed session');
     }
 
+    const originalAudioUrl = await this._resolveOriginalAudioUrl(fields);
+    const {
+      audio_url: _audioUrl,
+      storage_path: _storagePath,
+      original_audio_url: _originalAudioUrl,
+      ...updatableFields
+    } = fields;
+
     const { data, error } = await supabase
       .from(T_RESPONSES)
       .update({
-        ...fields,
+        ...updatableFields,
+        original_audio_url: originalAudioUrl,
         response_created_at: new Date().toISOString(), // refresh edit timestamp
       })
       .eq('id', responseId)
@@ -561,6 +572,30 @@ class ResponseService {
     } catch (err) {
       warn(`_syncAnsweredCount failed [session=${sessionId}]:`, err);
     }
+  }
+
+  /**
+   * Normalize audio-related fields into the canonical original_audio_url column.
+   *
+   * Accepts:
+   *  - original_audio_url directly
+   *  - audio_url from the speech endpoint
+   *  - storage_path from the speech endpoint (converted to a signed URL)
+   *
+   * @param {{ original_audio_url?: string|null, audio_url?: string|null, storage_path?: string|null }} fields
+   * @returns {Promise<string|null>}
+   */
+  async _resolveOriginalAudioUrl(fields = {}) {
+    const directUrl = fields.original_audio_url ?? fields.audio_url ?? null;
+    if (directUrl) {
+      return directUrl;
+    }
+
+    if (fields.storage_path) {
+      return audioService.getSignedUrl(fields.storage_path);
+    }
+
+    return null;
   }
 }
 

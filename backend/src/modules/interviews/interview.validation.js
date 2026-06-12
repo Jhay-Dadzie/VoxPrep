@@ -33,6 +33,8 @@ export const addQuestionValidation = Joi.object({
 export const submitAnswerValidation = Joi.object({
   answer_text: Joi.string().trim().min(1).required(),
   audio_url: Joi.string().uri().optional().allow(null),
+  original_audio_url: Joi.string().uri().optional().allow(null),
+  storage_path: Joi.string().trim().optional().allow(null, ''),
   response_duration_seconds: Joi.number().integer().min(0).optional(),
   transcription_confidence: Joi.number().min(0).max(1).optional()
 });
