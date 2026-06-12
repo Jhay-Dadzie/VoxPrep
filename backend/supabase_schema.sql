@@ -158,6 +158,9 @@ CREATE TABLE IF NOT EXISTS user_responses (
   session_id UUID NOT NULL REFERENCES interview_sessions(id) ON DELETE CASCADE ON UPDATE CASCADE,
   user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE ON UPDATE CASCADE,
   original_audio_url VARCHAR(512), -- URL to stored audio file (S3/Cloud Storage)
+  storage_path VARCHAR(2048),      -- Path in storage bucket (e.g., user-id/.../file.webm)
+  detected_language VARCHAR(64),   -- Language detected by STT (e.g., 'en')
+  request_id VARCHAR(255),         -- Provider request id (for debugging/support)
   transcribed_text TEXT NOT NULL,
   response_duration_seconds INTEGER,
   transcription_confidence DECIMAL(3, 2), -- 0-1 confidence score from STT

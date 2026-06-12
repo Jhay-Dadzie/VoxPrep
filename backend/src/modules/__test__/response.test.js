@@ -91,8 +91,11 @@ const mockResponseRow = {
   user_id:                  USER_ID,
   transcribed_text:         'I am a software engineer with 5 years of experience.',
   original_audio_url:       'https://storage.example.com/audio/resp-333.mp3',
+  storage_path:             'user-abc/sess-111/q222_123456_abc123.mp3',
   response_duration_seconds: 45,
   transcription_confidence: 0.97,
+  detected_language:        'en',
+  request_id:               'deepgram-req-abc123',
   response_created_at:      '2024-01-01T10:00:00.000Z',
 };
 
@@ -120,7 +123,8 @@ describe('Response Service', () => {
 
   describe('submitResponse', () => {
     it('creates a new response when none exists', async () => {
-      mockOnce(mockQuestion);          // question fetch
+      mockOnce({ id: SESSION_ID, user_id: USER_ID, status: 'in_progress' }); // session fetch
+      mockOnce({ id: QUESTION_ID });   // question fetch
       mockOnce(null);                  // no existing response (maybeSingle)
       mockOnce(mockResponseRow);       // insert returns row
       mockOnce(null, null, 1);         // _syncAnsweredCount count
@@ -143,7 +147,8 @@ describe('Response Service', () => {
     });
 
     it('updates an existing response (idempotent)', async () => {
-      mockOnce(mockQuestion);
+      mockOnce({ id: SESSION_ID, user_id: USER_ID, status: 'in_progress' }); // session fetch
+      mockOnce({ id: QUESTION_ID });   // question fetch
       mockOnce({ id: RESPONSE_ID });   // existing response found
       mockOnce(mockResponseRow);       // update returns updated row
 
@@ -158,7 +163,8 @@ describe('Response Service', () => {
     });
 
     it('throws when question not found or user has no access', async () => {
-      mockOnce(null, { message: 'Not found' });
+      mockOnce({ id: SESSION_ID, user_id: USER_ID, status: 'in_progress' }); // session fetch
+      mockOnce(null, { message: 'Not found' });                              // question fetch fails
 
       await expect(
         service.submitResponse(SESSION_ID, 'bad-q', USER_ID, { transcribed_text: 'x' })
@@ -166,10 +172,7 @@ describe('Response Service', () => {
     });
 
     it('throws when session is already completed', async () => {
-      mockOnce({
-        id: QUESTION_ID,
-        interview_sessions: { id: SESSION_ID, user_id: USER_ID, status: 'completed' },
-      });
+      mockOnce({ id: SESSION_ID, user_id: USER_ID, status: 'completed' }); // session fetch — completed
 
       await expect(
         service.submitResponse(SESSION_ID, QUESTION_ID, USER_ID, { transcribed_text: 'x' })
@@ -177,24 +180,31 @@ describe('Response Service', () => {
     });
 
     it('stores optional STT metadata when provided', async () => {
-      mockOnce(mockQuestion);
-      mockOnce(null);
-      mockOnce(mockResponseRow);
-      mockOnce(null, null, 1);
-      mockOnce({});
+      mockOnce({ id: SESSION_ID, user_id: USER_ID, status: 'in_progress' }); // session fetch
+      mockOnce({ id: QUESTION_ID });   // question fetch
+      mockOnce(null);                  // no existing response
+      mockOnce(mockResponseRow);       // insert returns row
+      mockOnce(null, null, 1);         // _syncAnsweredCount count
+      mockOnce({});                    // _syncAnsweredCount update
 
       await service.submitResponse(SESSION_ID, QUESTION_ID, USER_ID, {
         transcribed_text:          'Answer',
+        storage_path:              'user-1/sess-1/q1_123_abc.webm',
         original_audio_url:        'https://s3.example.com/audio.mp3',
         response_duration_seconds: 30,
         transcription_confidence:  0.95,
+        detected_language:         'en',
+        request_id:                'req-abc123',
       });
 
       expect(mockSupabase.insert).toHaveBeenCalledWith(
         expect.objectContaining({
+          storage_path:              'user-1/sess-1/q1_123_abc.webm',
           original_audio_url:        'https://s3.example.com/audio.mp3',
           response_duration_seconds: 30,
           transcription_confidence:  0.95,
+          detected_language:         'en',
+          request_id:                'req-abc123',
         })
       );
     });
@@ -204,7 +214,7 @@ describe('Response Service', () => {
 
   describe('updateResponse', () => {
     it('updates transcribed text successfully', async () => {
-      mockOnce({ id: RESPONSE_ID, session_id: SESSION_ID, interview_sessions: { status: 'in_progress' } });
+      mockOnce({ id: RESPONSE_ID, session_id: SESSION_ID, original_audio_url: 'https://example.com/audio.mp3', storage_path: 'user/session/audio.mp3', interview_sessions: { status: 'in_progress' } });
       mockOnce({ ...mockResponseRow, transcribed_text: 'Corrected answer.' });
 
       const result = await service.updateResponse(RESPONSE_ID, USER_ID, {
@@ -215,6 +225,39 @@ describe('Response Service', () => {
         expect.objectContaining({ transcribed_text: 'Corrected answer.' })
       );
       expect(result.transcribed_text).toBe('Corrected answer.');
+    });
+
+    it('preserves original_audio_url and storage_path during transcript update', async () => {
+      const audioUrl = 'https://storage.example.com/audio/resp-333.mp3';
+      const storagePath = 'user-abc/sess-111/q222_123456_abc123.mp3';
+      
+      mockOnce({ 
+        id: RESPONSE_ID, 
+        session_id: SESSION_ID, 
+        original_audio_url: audioUrl,
+        storage_path: storagePath,
+        interview_sessions: { status: 'in_progress' } 
+      });
+      mockOnce({ 
+        ...mockResponseRow, 
+        original_audio_url: audioUrl, 
+        storage_path: storagePath,
+        transcribed_text: 'Enriched with transcript' 
+      });
+
+      const result = await service.updateResponse(RESPONSE_ID, USER_ID, {
+        transcribed_text: 'Enriched with transcript',
+      });
+
+      // Verify that original_audio_url was preserved (not reset to null)
+      expect(result.original_audio_url).toBe(audioUrl);
+      expect(result.storage_path).toBe(storagePath);
+      expect(mockSupabase.update).toHaveBeenCalledWith(
+        expect.objectContaining({ 
+          transcribed_text: 'Enriched with transcript',
+          original_audio_url: audioUrl,
+        })
+      );
     });
 
     it('throws when response not found', async () => {
@@ -391,6 +434,86 @@ describe('Response Service', () => {
       await expect(
         service.getSessionStats('bad-session', USER_ID)
       ).rejects.toThrow('Session not found or access denied');
+    });
+  });
+
+  // ── patchConfidence ────────────────────────────────────────────────────────
+
+  describe('patchConfidence (internal)', () => {
+    it('patches transcription_confidence via admin path', async () => {
+      mockOnce(null); // update succeeds silently
+
+      await service.patchConfidence(RESPONSE_ID, 0.95);
+
+      expect(mockSupabase.update).toHaveBeenCalledWith({
+        transcription_confidence: 0.95,
+      });
+    });
+
+    it('logs warning on update failure', async () => {
+      mockOnce(null, { message: 'Database error' });
+
+      // Should not throw — non-fatal
+      await service.patchConfidence(RESPONSE_ID, 0.95);
+
+      // Verify warning was logged (via spy on logger.warn)
+    });
+  });
+
+  // ── patchSttMetadata ────────────────────────────────────────────────────────
+
+  describe('patchSttMetadata (internal)', () => {
+    it('patches detected_language and request_id', async () => {
+      mockOnce(null); // update succeeds
+
+      await service.patchSttMetadata(RESPONSE_ID, {
+        detected_language: 'en',
+        request_id: 'deepgram-xyz',
+      });
+
+      expect(mockSupabase.update).toHaveBeenCalledWith({
+        detected_language: 'en',
+        request_id: 'deepgram-xyz',
+      });
+    });
+
+    it('patches only detected_language if request_id is undefined', async () => {
+      mockOnce(null);
+
+      await service.patchSttMetadata(RESPONSE_ID, {
+        detected_language: 'fr',
+      });
+
+      expect(mockSupabase.update).toHaveBeenCalledWith({
+        detected_language: 'fr',
+      });
+    });
+
+    it('patches only request_id if detected_language is undefined', async () => {
+      mockOnce(null);
+
+      await service.patchSttMetadata(RESPONSE_ID, {
+        request_id: 'deepgram-abc',
+      });
+
+      expect(mockSupabase.update).toHaveBeenCalledWith({
+        request_id: 'deepgram-abc',
+      });
+    });
+
+    it('does nothing if both fields are undefined', async () => {
+      await service.patchSttMetadata(RESPONSE_ID, {});
+
+      expect(mockSupabase.update).not.toHaveBeenCalled();
+    });
+
+    it('logs warning on update failure', async () => {
+      mockOnce(null, { message: 'Database error' });
+
+      // Should not throw — non-fatal
+      await service.patchSttMetadata(RESPONSE_ID, {
+        detected_language: 'en',
+      });
     });
   });
 });
@@ -711,8 +834,11 @@ describe('Response Mapper', () => {
     user_id:                  USER_ID,
     transcribed_text:         'Sample answer.',
     original_audio_url:       'https://s3.example.com/audio.mp3',
+    storage_path:             'user-abc/sess-111/q222_123456_abc123.mp3',
     response_duration_seconds: 30,
     transcription_confidence: 0.92,
+    detected_language:        'en',
+    request_id:               'deepgram-req-xyz789',
     response_created_at:      '2024-01-01T10:00:00.000Z',
   };
 
@@ -725,6 +851,13 @@ describe('Response Mapper', () => {
       expect(result).not.toHaveProperty('user_id');
     });
 
+    it('exposes audio metadata fields', () => {
+      const result = toResponse(rawRow);
+      expect(result.storage_path).toBe('user-abc/sess-111/q222_123456_abc123.mp3');
+      expect(result.detected_language).toBe('en');
+      expect(result.request_id).toBe('deepgram-req-xyz789');
+    });
+
     it('returns null for a null row', () => {
       expect(toResponse(null)).toBeNull();
     });
@@ -734,6 +867,9 @@ describe('Response Mapper', () => {
       const result = toResponse(sparse);
       expect(result.original_audio_url).toBeNull();
       expect(result.transcription_confidence).toBeNull();
+      expect(result.storage_path).toBeNull();
+      expect(result.detected_language).toBeNull();
+      expect(result.request_id).toBeNull();
     });
   });
 

@@ -17,6 +17,13 @@
  *    caught and logged; the response is still returned without feedback.
  *  - All public methods are async and throw descriptive errors so the
  *    controller's asyncHandler / AppError layer gives clean 4xx/5xx splits.
+ *
+ *  ── patchConfidence ──────────────────────────────────────────────────────────
+ *  transcription_confidence is intentionally excluded from updateResponse
+ *  (clients should not override it manually). The speech pipeline IS the
+ *  authoritative source of confidence values, so it has its own dedicated
+ *  internal method: patchConfidence().  This keeps the public API safe while
+ *  letting the STT pipeline persist its output accurately.
  */
 
 import { getSupabaseAdminClient } from '../../config/supabase.js';
@@ -37,8 +44,8 @@ const T_FEEDBACK  = 'feedback';
  * Never select * — keeps the query plan tight and avoids leaking internals.
  */
 const RESPONSE_COLS =
-  'id, question_id, session_id, user_id, transcribed_text, original_audio_url, ' +
-  'response_duration_seconds, transcription_confidence, response_created_at';
+  'id, question_id, session_id, user_id, transcribed_text, original_audio_url, storage_path, ' +
+  'response_duration_seconds, transcription_confidence, detected_language, request_id, response_created_at';
 
 /**
  * Question columns needed for the "with question" shape.
@@ -79,10 +86,15 @@ class ResponseService {
    * Idempotent — calling twice for the same question replaces the first
    * response rather than creating a duplicate (one response per question).
    *
+   * Called by:
+   *  - response.controller  (explicit user submissions)
+   *  - speech.controller    (Phase 2: audio-only row creation)
+   *
    * @param {string} sessionId
    * @param {string} questionId
    * @param {string} userId
    * @param {{ transcribed_text: string, original_audio_url?: string|null,
+   *           storage_path?: string|null,
    *           response_duration_seconds?: number|null,
    *           transcription_confidence?: number|null }} responseData
    * @returns {Promise<object>} Raw DB row from user_responses
@@ -91,31 +103,40 @@ class ResponseService {
     const supabase = getSupabase();
 
     // ── 1. Verify access & session state ──────────────────────────────────
+    //
+    // WHY TWO QUERIES:
+    // PostgREST does not support filtering on joined table columns via
+    // .eq('joined_table.column', value) — it silently returns null instead
+    // of an error, making the ownership check appear to fail even when the
+    // data exists.  We verify ownership on the session directly first, then
+    // confirm the question belongs to that session.
+
+    // Step 1a: verify the session belongs to this user and get its status
+    const { data: session, error: sessError } = await supabase
+      .from(T_SESSIONS)
+      .select('id, user_id, status')
+      .eq('id', sessionId)
+      .eq('user_id', userId)
+      .single();
+
+    if (sessError || !session) {
+      throw new Error('Session not found or access denied');
+    }
+
+    if (session.status === 'completed') {
+      throw new Error('Cannot submit a response to a completed session');
+    }
+
+    // Step 1b: verify the question belongs to this session
     const { data: question, error: qError } = await supabase
       .from(T_QUESTIONS)
-      .select(`
-        id,
-        ${T_SESSIONS}!inner (
-          id,
-          user_id,
-          status
-        )
-      `)
+      .select('id')
       .eq('id', questionId)
       .eq('session_id', sessionId)
-      .eq(`${T_SESSIONS}.user_id`, userId)
       .single();
 
     if (qError || !question) {
       throw new Error('Question not found or access denied');
-    }
-
-    const session = Array.isArray(question[T_SESSIONS])
-      ? question[T_SESSIONS][0]
-      : question[T_SESSIONS];
-
-    if (session?.status === 'completed') {
-      throw new Error('Cannot submit a response to a completed session');
     }
 
     // ── 2. Check for existing response ────────────────────────────────────
@@ -130,11 +151,14 @@ class ResponseService {
     const originalAudioUrl = await this._resolveOriginalAudioUrl(responseData);
 
     const payload = {
-      transcribed_text: responseData.transcribed_text,
-      original_audio_url: originalAudioUrl,
+      transcribed_text:          responseData.transcribed_text,
+      original_audio_url:        originalAudioUrl,
+      storage_path:              responseData.storage_path ?? null,
       response_duration_seconds: responseData.response_duration_seconds ?? null,
-      transcription_confidence: responseData.transcription_confidence ?? null,
-      response_created_at: now,
+      transcription_confidence:  responseData.transcription_confidence  ?? null,
+      detected_language:         responseData.detected_language ?? null,
+      request_id:                responseData.request_id ?? null,
+      response_created_at:       now,
     };
 
     let row;
@@ -160,8 +184,8 @@ class ResponseService {
         .from(T_RESPONSES)
         .insert({
           question_id: questionId,
-          session_id: sessionId,
-          user_id: userId,
+          session_id:  sessionId,
+          user_id:     userId,
           ...payload,
         })
         .select(RESPONSE_COLS)
@@ -188,9 +212,14 @@ class ResponseService {
    * Rejects updates on responses that belong to completed sessions to preserve
    * the integrity of historical records.
    *
+   * NOTE: transcription_confidence is intentionally excluded here — clients
+   * must not override STT-generated confidence values.  Use patchConfidence()
+   * for the speech pipeline.
+   *
    * @param {string} responseId
    * @param {string} userId
    * @param {{ transcribed_text?: string, original_audio_url?: string|null,
+   *           audio_url?: string|null, storage_path?: string|null,
    *           response_duration_seconds?: number|null }} fields
    * @returns {Promise<object>} Updated row
    */
@@ -200,7 +229,7 @@ class ResponseService {
     // Fetch existing with session state check
     const { data: existing, error: fetchError } = await supabase
       .from(T_RESPONSES)
-      .select(`id, session_id, ${T_SESSIONS} ( status )`)
+      .select(`id, session_id, original_audio_url, storage_path, ${T_SESSIONS} ( status )`)
       .eq('id', responseId)
       .eq('user_id', userId)
       .single();
@@ -217,11 +246,22 @@ class ResponseService {
       throw new Error('Cannot edit a response that belongs to a completed session');
     }
 
-    const originalAudioUrl = await this._resolveOriginalAudioUrl(fields);
+    // Preserve existing audio URL if not explicitly provided in fields
+    const audioUrlFields = {
+      ...fields,
+      original_audio_url: fields.original_audio_url ?? existing.original_audio_url,
+      storage_path:       fields.storage_path       ?? existing.storage_path,
+    };
+
+    const originalAudioUrl = await this._resolveOriginalAudioUrl(audioUrlFields);
+
+    // Strip audio helper fields — only persist the resolved URL
     const {
-      audio_url: _audioUrl,
-      storage_path: _storagePath,
+      audio_url:          _audioUrl,
+      storage_path:       _storagePath,
       original_audio_url: _originalAudioUrl,
+      // Explicitly exclude transcription_confidence — public clients cannot set it
+      transcription_confidence: _confidence,
       ...updatableFields
     } = fields;
 
@@ -229,7 +269,7 @@ class ResponseService {
       .from(T_RESPONSES)
       .update({
         ...updatableFields,
-        original_audio_url: originalAudioUrl,
+        original_audio_url:  originalAudioUrl,
         response_created_at: new Date().toISOString(), // refresh edit timestamp
       })
       .eq('id', responseId)
@@ -244,6 +284,75 @@ class ResponseService {
 
     info(`Response updated [id=${responseId}, user=${userId}]`);
     return data;
+  }
+
+  /**
+   * Patch the transcription_confidence field directly.
+   *
+   * This is an INTERNAL method reserved for the speech pipeline.
+   * It bypasses the public updateResponse restriction so the STT service
+   * can persist its confidence score after transcription completes.
+   *
+   * Not exported as a named export — callers must go through responseService
+   * to make the internal-only nature explicit.
+   *
+   * @param {string} responseId
+   * @param {number} confidence  - 0–1 value from Deepgram
+   * @returns {Promise<void>}
+   */
+  async patchConfidence(responseId, confidence) {
+    const supabase = getSupabase();
+
+    const { error } = await supabase
+      .from(T_RESPONSES)
+      .update({ transcription_confidence: confidence })
+      .eq('id', responseId);
+
+    if (error) {
+      // Non-fatal — confidence is optional metadata; log and move on
+      warn(`patchConfidence failed [id=${responseId}]:`, error);
+    }
+  }
+
+  /**
+   * Patch STT metadata (detected_language, request_id) on existing response.
+   *
+   * This is an INTERNAL method reserved for the speech pipeline.
+   * It persists language detection and provider request IDs after transcription.
+   *
+   * Not exported as a named export — callers must go through responseService
+   * to make the internal-only nature explicit.
+   *
+   * @param {string} responseId
+   * @param {object} metadata
+   * @param {string|null} metadata.detected_language - Language detected by STT
+   * @param {string|null} metadata.request_id        - Provider request ID
+   * @returns {Promise<void>}
+   */
+  async patchSttMetadata(responseId, { detected_language, request_id }) {
+    const supabase = getSupabase();
+
+    const updatePayload = {};
+    if (detected_language !== undefined) {
+      updatePayload.detected_language = detected_language;
+    }
+    if (request_id !== undefined) {
+      updatePayload.request_id = request_id;
+    }
+
+    if (Object.keys(updatePayload).length === 0) {
+      return; // Nothing to update
+    }
+
+    const { error } = await supabase
+      .from(T_RESPONSES)
+      .update(updatePayload)
+      .eq('id', responseId);
+
+    if (error) {
+      // Non-fatal — metadata is optional; log and move on
+      warn(`patchSttMetadata failed [id=${responseId}]:`, error);
+    }
   }
 
   /**
@@ -325,7 +434,6 @@ class ResponseService {
     const from = (page - 1) * limit;
     const to   = from + limit - 1;
 
-    // Build select — feedback is optional
     const feedbackJoin = include_feedback
       ? `, ${T_FEEDBACK} ( ${FEEDBACK_COLS} )`
       : '';
@@ -336,11 +444,6 @@ class ResponseService {
       ${feedbackJoin}
     `;
 
-    // Supabase doesn't allow ORDER on a joined table column directly,
-    // so we order by response_created_at on the main table.
-    // Clients that need question_number ordering should sort client-side
-    // or we can fetch in a second pass — using response_created_at is fine
-    // because answers are typically submitted in question order.
     let query = supabase
       .from(T_RESPONSES)
       .select(selectStr, { count: 'exact' })
@@ -348,8 +451,6 @@ class ResponseService {
       .eq('user_id', userId)
       .order('response_created_at', { ascending: true });
 
-    // Best-effort: if the feedback table doesn't exist yet, the query
-    // will fail. Retry without the feedback join.
     let data, count, error;
 
     ({ data, error, count } = await query.range(from, to));
@@ -381,7 +482,7 @@ class ResponseService {
       pagination: {
         page,
         limit,
-        total: count ?? 0,
+        total:      count ?? 0,
         totalPages: Math.ceil((count ?? 0) / limit),
       },
     };
@@ -418,7 +519,6 @@ class ResponseService {
       .single();
 
     if (error) {
-      // If the feedback join caused the failure, retry without it
       if (include_feedback) {
         warn(`getResponseById: feedback join failed, retrying without [id=${responseId}]:`, error);
 
@@ -451,7 +551,6 @@ class ResponseService {
   async getQuestionResponse(sessionId, questionId, userId) {
     const supabase = getSupabase();
 
-    // Verify access in one shot by joining through the session
     const { data: session } = await supabase
       .from(T_SESSIONS)
       .select('id')
@@ -475,7 +574,6 @@ class ResponseService {
       .eq('user_id', userId)
       .maybeSingle();
 
-    // Best-effort feedback fallback
     if (error) {
       warn(`getQuestionResponse: feedback join failed, retrying without [question=${questionId}]:`, error);
 
@@ -493,7 +591,7 @@ class ResponseService {
       throw new Error('Failed to retrieve response');
     }
 
-    return data ?? null; // null = not yet answered
+    return data ?? null;
   }
 
   /**
@@ -530,10 +628,10 @@ class ResponseService {
       throw new Error('Failed to compute session statistics');
     }
 
-    const answered     = liveCount ?? 0;
-    const total        = session.total_questions ?? 0;
-    const pending      = Math.max(0, total - answered);
-    const pct          = total > 0 ? Math.round((answered / total) * 100) : 0;
+    const answered = liveCount ?? 0;
+    const total    = session.total_questions ?? 0;
+    const pending  = Math.max(0, total - answered);
+    const pct      = total > 0 ? Math.round((answered / total) * 100) : 0;
 
     return {
       session_id:            sessionId,
@@ -601,12 +699,16 @@ class ResponseService {
 
 const responseService = new ResponseService();
 
-export const submitResponse = responseService.submitResponse.bind(responseService);
-export const updateResponse = responseService.updateResponse.bind(responseService);
-export const deleteResponse = responseService.deleteResponse.bind(responseService);
+export const submitResponse      = responseService.submitResponse.bind(responseService);
+export const updateResponse      = responseService.updateResponse.bind(responseService);
+export const deleteResponse      = responseService.deleteResponse.bind(responseService);
 export const getSessionResponses = responseService.getSessionResponses.bind(responseService);
-export const getResponseById = responseService.getResponseById.bind(responseService);
+export const getResponseById     = responseService.getResponseById.bind(responseService);
 export const getQuestionResponse = responseService.getQuestionResponse.bind(responseService);
-export const getSessionStats = responseService.getSessionStats.bind(responseService);
+export const getSessionStats     = responseService.getSessionStats.bind(responseService);
+
+// Internal — exposed only for the speech pipeline
+export const patchConfidence = responseService.patchConfidence.bind(responseService);
+export const patchSttMetadata = responseService.patchSttMetadata.bind(responseService);
 
 export default responseService;

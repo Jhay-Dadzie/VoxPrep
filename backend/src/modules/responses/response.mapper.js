@@ -41,8 +41,11 @@ function toResponse(row) {
     session_id: row.session_id,
     transcribed_text: row.transcribed_text ?? null,
     original_audio_url: row.original_audio_url ?? null,
+    storage_path: row.storage_path ?? null,
     response_duration_seconds: row.response_duration_seconds ?? null,
     transcription_confidence: row.transcription_confidence ?? null,
+    detected_language: row.detected_language ?? null,
+    request_id: row.request_id ?? null,
     responded_at: toISO(row.response_created_at),
   };
 }
