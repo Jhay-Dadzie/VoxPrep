@@ -70,9 +70,9 @@ export default function Signin() {
           </View>
 
           <View style={styles.social}>
-            {(['logo-google', 'logo-apple', 'logo-facebook'] as const).map((n) => (
+            {(['logo-google', 'logo-apple'] as const).map((n) => (
               <Pressable key={n} style={[styles.socialBtn, { borderColor: colors.border }]}>
-                <Ionicons name={n} size={20} color={n === 'logo-facebook' ? '#1877F2' : colors.oppositeColor} />
+                <Ionicons name={n} size={20} color={colors.oppositeColor} />
               </Pressable>
             ))}
           </View>
