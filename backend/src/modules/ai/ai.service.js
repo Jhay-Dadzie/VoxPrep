@@ -83,10 +83,19 @@ const questionSchema = {
 export const callGemini = async ({
   messages,
   temperature = 0.7,
-  responseSchema = questionSchema,
+  responseSchema,
   responseMimeType = "application/json",
   model = GEMINI_MODEL,
 }) => {
+  const generationConfig = {
+    temperature,
+    responseMimeType,
+  };
+
+  if (responseSchema) {
+    generationConfig.responseSchema = responseSchema;
+  }
+
   try {
     if (!GEMINI_API_KEY) {
       throw new Error("Missing Gemini API key");
@@ -97,11 +106,7 @@ export const callGemini = async ({
       {
         contents: toGeminiContents(messages),
         systemInstruction: toSystemInstruction(messages),
-        generationConfig: {
-          temperature,
-          responseMimeType,
-          responseSchema,
-        },
+        generationConfig,
       },
       {
         headers: {
