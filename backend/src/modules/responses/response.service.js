@@ -48,11 +48,11 @@ const QUESTION_CONTEXT_COLS =
 
 /**
  * Feedback columns needed when include_feedback = true.
- * Wrapped in a try/catch at query time — table may not exist yet.
+ * Wrapped in a try/catch at query time — the join is best-effort.
  */
 const FEEDBACK_COLS =
-  'id, overall_score, relevance_score, clarity_score, confidence_score, ' +
-  'detailed_feedback, improvement_suggestions, created_at';
+  'id, overall_response_score, relevance_score, completeness_score, clarity_score, confidence_score, ' +
+  'strengths, improvements, suggestions, follow_up_tip, generated_at, ai_model_used';
 
 // ─── Singleton admin client ───────────────────────────────────────────────────
 

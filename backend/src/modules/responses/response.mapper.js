@@ -23,6 +23,34 @@ function toISO(v) {
   return v instanceof Date ? v.toISOString() : v;
 }
 
+function parseMaybeJson(value) {
+  if (typeof value !== 'string' || !value.trim()) return null;
+
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === 'object' ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function parseTextList(value) {
+  if (!value) return [];
+  if (Array.isArray(value)) {
+    return value.filter((item) => typeof item === 'string' && item.trim().length > 0);
+  }
+
+  const parsed = parseMaybeJson(value);
+  if (Array.isArray(parsed)) {
+    return parsed.filter((item) => typeof item === 'string' && item.trim().length > 0);
+  }
+
+  return String(value)
+    .split(/\r?\n+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
 // ─── Shapes ───────────────────────────────────────────────────────────────────
 
 /**
@@ -86,15 +114,22 @@ function _buildFeedback(raw) {
   const fb = Array.isArray(raw) ? raw[0] : raw;
   if (!fb) return null;
 
+  const meta = parseMaybeJson(fb.suggestions);
+  const strengths = parseTextList(fb.strengths);
+  const improvements = parseTextList(fb.improvements);
+
   return {
     id: fb.id,
-    overall_score: fb.overall_score ?? null,
+    overall_score: fb.overall_score ?? fb.overall_response_score ?? null,
     relevance_score: fb.relevance_score ?? null,
+    completeness_score: fb.completeness_score ?? null,
     clarity_score: fb.clarity_score ?? null,
     confidence_score: fb.confidence_score ?? null,
-    detailed_feedback: fb.detailed_feedback ?? null,
-    improvement_suggestions: fb.improvement_suggestions ?? null,
-    evaluated_at: toISO(fb.created_at),
+    detailed_feedback: meta?.summary ?? fb.suggestions ?? null,
+    improvement_suggestions: improvements.length > 0 ? improvements.join('\n') : fb.follow_up_tip ?? null,
+    evaluated_at: toISO(fb.generated_at ?? fb.created_at),
+    strengths,
+    improvements,
   };
 }
 
