@@ -1,0 +1,9 @@
+{
+    "python.terminal.useEnvFile": true,
+    "python-envs.workspaceSearchPaths": [
+        ".venv",
+        "*/.venv",
+        "*/.env"
+    ],
+    "postman.settings.dotenv-detection-notification-visibility": false
+}

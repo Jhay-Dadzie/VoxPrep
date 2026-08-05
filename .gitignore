@@ -1,0 +1,17 @@
+node_modules/
+
+# env — never commit secrets
+.env
+.env.*
+!.env.example
+
+# expo
+.expo/
+
+# logs
+*.log
+npm-debug.*
+
+# os
+.DS_Store
+Thumbs.db
