@@ -28,7 +28,7 @@ export default function ForgotPassword() {
           </View>
           <ThemedText type='title' style={[styles.title, { color: colors.oppositeColor }]}>Reset Your Password</ThemedText>
           <ThemedText style={[styles.sub, { color: colors.subtext }]}>
-            Enter the email address associated with your account and we'll send you a link to reset your password.
+            Enter the email address associated with your account and we&apos;ll send you a link to reset your password.
           </ThemedText>
 
           <Input

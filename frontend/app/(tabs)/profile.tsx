@@ -4,6 +4,7 @@ import { Ionicons } from '@expo/vector-icons'
 import { router } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { ThemedText } from '@/components/themed-text'
+import { ConfirmDialog } from '@/components/confirm-dialog'
 import { useColorScheme } from '@/hooks/use-color-scheme'
 import { useThemeOverride } from '@/hooks/theme-context'
 import { Colors } from '@/constants/theme'
@@ -15,6 +16,12 @@ export default function Profile() {
   const colors = Colors[colorScheme ?? 'light']
   const { setOverride } = useThemeOverride()
   const dark = colorScheme === 'dark'
+  const [confirmLogout, setConfirmLogout] = useState(false)
+
+  const handleLogout = () => {
+    setConfirmLogout(false)
+    router.replace('/(authScreens)/signin')
+  }
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.card }} edges={['top']}>
@@ -24,7 +31,7 @@ export default function Profile() {
         </Pressable>
         <ThemedText style={[styles.headerTitle, { color: colors.tint }]}>Profile</ThemedText>
         <View style={{ flex: 1 }} />
-        <Pressable hitSlop={10}>
+        <Pressable hitSlop={10} onPress={() => router.push('/settings/preferences')}>
           <Ionicons name="settings-sharp" size={20} color={colors.tint} />
         </Pressable>
       </View>
@@ -64,6 +71,13 @@ export default function Profile() {
 
         <SectionTitle text="App Preferences" color={colors.oppositeColor} />
         <View style={[styles.group, { backgroundColor: colors.card }]}>
+          <Row
+            icon="options-outline"
+            label="Practice Preferences"
+            colors={colors}
+            onPress={() => router.push('/settings/preferences')}
+          />
+          <Divider color={colors.divider} />
           <Row
             icon="notifications-outline"
             label="Notifications"
@@ -107,11 +121,27 @@ export default function Profile() {
           <Row icon="chatbubble-ellipses-outline" label="Feedback" colors={colors} onPress={() => {}} />
         </View>
 
-        <Pressable style={styles.logout} onPress={() => router.replace('/(authScreens)/signin')}>
+        <Pressable
+          style={styles.logout}
+          onPress={() => setConfirmLogout(true)}
+          accessibilityRole="button"
+        >
           <Ionicons name="log-out-outline" size={18} color={colors.danger} />
           <ThemedText style={[styles.logoutText, { color: colors.danger }]}>Logout</ThemedText>
         </Pressable>
       </ScrollView>
+
+      <ConfirmDialog
+        visible={confirmLogout}
+        icon="log-out-outline"
+        destructive
+        title="Log out?"
+        message="You'll need to sign in again to get back to your sessions. Your saved mode and interviewer are kept."
+        confirmLabel="Log out"
+        cancelLabel="Stay signed in"
+        onConfirm={handleLogout}
+        onCancel={() => setConfirmLogout(false)}
+      />
     </SafeAreaView>
   )
 }

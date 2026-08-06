@@ -100,7 +100,7 @@ export default function OnboardingScreen() {
       {/* Header */}
       <ThemedView style={styles.header}>
         <ThemedText style={styles.logo}>VoxPrep</ThemedText>
-        <ThemedText type='link' onPress={() => router.push('/(authScreens)/signup')}>Skip</ThemedText>
+        <ThemedText type='link' onPress={() => router.replace('/(authScreens)/signin')}>Skip</ThemedText>
         
       </ThemedView>
 

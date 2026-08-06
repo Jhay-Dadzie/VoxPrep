@@ -51,6 +51,11 @@ CREATE TABLE IF NOT EXISTS interview_sessions (
   user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   job_description_id UUID REFERENCES job_descriptions(id) ON DELETE SET NULL ON UPDATE CASCADE,
   session_title VARCHAR(255),
+  -- Which practice mode produced this session. Must stay in sync with MODE_IDS
+  -- in src/modules/interviews/modes.js.
+  -- Named practice_mode because Postgres has a built-in mode() aggregate that
+  -- a bare `mode` column collides with over PostgREST.
+  practice_mode VARCHAR(50) NOT NULL DEFAULT 'job_interview',
   status VARCHAR(50) DEFAULT 'in_progress', -- 'in_progress', 'completed', 'paused'
   total_questions INTEGER DEFAULT 0,
   questions_answered INTEGER DEFAULT 0,
@@ -62,6 +67,7 @@ CREATE TABLE IF NOT EXISTS interview_sessions (
   notes TEXT, -- User notes about the session
   
   CONSTRAINT status_valid CHECK (status IN ('in_progress', 'completed', 'paused')),
+  CONSTRAINT session_practice_mode_valid CHECK (practice_mode IN ('job_interview', 'oral_exam', 'viva_defense')),
   CONSTRAINT score_valid CHECK (overall_score IS NULL OR (overall_score >= 0 AND overall_score <= 100))
 );
  
@@ -298,6 +304,10 @@ BEGIN
   LEFT JOIN user_responses ur ON ur.question_id = q.id
   LEFT JOIN feedback f ON f.response_id = ur.id
   WHERE s.id = v_session_id
+  -- Required: s.user_id is a plain column alongside the AVG aggregates.
+  -- The WHERE clause already restricts this to one session, so grouping by
+  -- the owning user still yields exactly one row.
+  GROUP BY s.user_id
   ON CONFLICT (session_id) DO UPDATE SET
     avg_relevance_score = EXCLUDED.avg_relevance_score,
     avg_clarity_score = EXCLUDED.avg_clarity_score,

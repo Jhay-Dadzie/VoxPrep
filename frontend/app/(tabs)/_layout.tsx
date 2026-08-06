@@ -1,5 +1,5 @@
 import { Tabs } from "expo-router";
-import { LayoutDashboard, Mic, SquareKanban, User } from "lucide-react-native"
+import { LayoutDashboard, Mic, SquareKanban, TrendingUp, User } from "lucide-react-native"
 import { Colors } from "@/constants/theme";
 import { useColorScheme } from '@/hooks/use-color-scheme'
 import { View, Text, Pressable } from "react-native";
@@ -110,6 +110,10 @@ export default function TabLayout() {
             <Tabs.Screen name="results" options={{
                 title: "Results",
                 tabBarIcon: ({color}) => <SquareKanban size={20} color={color}/>
+            }}/>
+            <Tabs.Screen name="progress" options={{
+                title: "Progress",
+                tabBarIcon: ({color}) => <TrendingUp size={20} color={color}/>
             }}/>
             <Tabs.Screen name="profile" options={{
                 title: "Profile",

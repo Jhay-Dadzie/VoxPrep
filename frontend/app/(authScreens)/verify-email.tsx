@@ -46,7 +46,7 @@ export default function VerifyEmail() {
           </View>
           <ThemedText type='title' style={[styles.title, { color: colors.oppositeColor }]}>Verify Your Email</ThemedText>
           <ThemedText style={[styles.sub, { color: colors.subtext }]}>
-            We've sent a 6-digit verification code to your inbox. Please enter it below to secure your account.
+            We&apos;ve sent a 6-digit verification code to your inbox. Please enter it below to secure your account.
           </ThemedText>
 
           <View style={styles.row}>
@@ -74,11 +74,11 @@ export default function VerifyEmail() {
             <View style={[styles.progressFill, { width: `${(fillCount / 6) * 100}%`, backgroundColor: colors.tint }]} />
           </View>
 
-          <Button action={() => router.replace('/(tabs)/dashboard')} disabled={fillCount < 6}>
+          <Button action={() => router.replace('/mode-select')} disabled={fillCount < 6}>
             <ThemedText type='placeholderText'>Verify Account</ThemedText>
           </Button>
 
-          <ThemedText style={[styles.didnt, { color: colors.subtext }]}>Didn't receive the email?</ThemedText>
+          <ThemedText style={[styles.didnt, { color: colors.subtext }]}>Didn&apos;t receive the email?</ThemedText>
           <View style={styles.timerRow}>
             <Ionicons name='time-outline' size={14} color={colors.muted} />
             <ThemedText style={{ color: colors.subtext, fontSize: 13 }}>

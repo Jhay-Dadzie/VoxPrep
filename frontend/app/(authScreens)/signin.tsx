@@ -16,8 +16,11 @@ export default function Signin() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
 
+  // Every login lands on the mode picker rather than the dashboard, so a user
+  // returning after logout can switch what they are preparing for. The picker
+  // pre-selects their last choice, so staying put is a single tap.
   const handleLogin = () => {
-    router.replace('/(tabs)/dashboard')
+    router.replace('/mode-select')
   }
 
   return (
@@ -78,7 +81,7 @@ export default function Signin() {
           </View>
 
           <View style={styles.bottom}>
-            <ThemedText style={{ color: colors.subtext }}>Don't have an account? </ThemedText>
+            <ThemedText style={{ color: colors.subtext }}>Don&apos;t have an account? </ThemedText>
             <Link href='/(authScreens)/signup'>
               <ThemedText style={{ color: colors.tint, fontWeight: '600' }}>Sign Up</ThemedText>
             </Link>
