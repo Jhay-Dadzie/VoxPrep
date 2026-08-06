@@ -200,10 +200,12 @@ export const getHistorySessionById = async (sessionId, userId) => {
     if (fbError) throw new Error(fbError.message);
 
     // Build a map: response_id -> feedback object (or null)
-    feedbackMap = feedbacks.reduce((acc, fb) => {
-      acc[fb.response_id] = fb;
-      return acc;
-    }, {});
+    feedbackMap = Array.isArray(feedbacks)
+      ? feedbacks.reduce((acc, fb) => {
+          acc[fb.response_id] = fb;
+          return acc;
+        }, {})
+      : {};
   }
 
   // 5. Attach feedback to each response (as a nested property)
