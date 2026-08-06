@@ -19,6 +19,7 @@ import questionRoutes from './modules/questions/question.routes.js'
 import responseRoutes from './modules/responses/response.routes.js'
 import speechRoutes from './modules/speech/speech.routes.js'
 import feedbackRoutes from './modules/feedback/feedback.routes.js'
+import historyRoutes from './modules/history/history.routes.js'
 
 const app = express();
 const PORT = process.env.PORT
@@ -100,6 +101,7 @@ app.use('/api/v1/questions', questionRoutes)
 app.use('/api/v1/responses', responseRoutes)
 app.use('/api/v1/speech', speechRoutes)
 app.use('/api/v1/feedback', feedbackRoutes)
+app.use('/api/v1/history', historyRoutes)
 
 
 /**
