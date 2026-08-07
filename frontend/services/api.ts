@@ -200,6 +200,34 @@ export async function fetchOverview(mode: ModeId): Promise<DashboardOverview> {
   return body.data
 }
 
+export type SpokenQuestion = {
+  /** False when no cloud voice is configured or it refused — use device speech. */
+  available: boolean
+  audioBase64?: string
+  mimeType?: string
+  voiceId?: string
+  characters?: number
+}
+
+/**
+ * Ask the server to speak a question in a panelist's voice.
+ *
+ * Never throws for an unavailable voice — `available: false` means fall back to
+ * on-device speech, which is a normal outcome rather than an error.
+ */
+export async function speakQuestionRemote(input: {
+  text: string
+  panelistVoiceId: string
+  gender: 'male' | 'female'
+}): Promise<SpokenQuestion> {
+  try {
+    const body = await post<{ data: SpokenQuestion }>('/api/tts/speak', input, 30_000)
+    return body.data
+  } catch {
+    return { available: false }
+  }
+}
+
 export type CvGap = {
   id: string
   title: string

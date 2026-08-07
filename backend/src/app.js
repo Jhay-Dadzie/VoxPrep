@@ -8,6 +8,7 @@ import interviewRoutes from './modules/interviews/interviews.routes.js';
 import documentRoutes from './modules/documents/documents.routes.js';
 import responseRoutes from './modules/responses/responses.routes.js';
 import sessionRoutes from './modules/sessions/sessions.routes.js';
+import ttsRoutes from './modules/tts/tts.routes.js';
 
 
 const app = express();
@@ -31,6 +32,7 @@ app.use('/api/interviews', interviewRoutes);
 app.use('/api/documents', documentRoutes);
 app.use('/api/responses', responseRoutes);
 app.use('/api/sessions', sessionRoutes);
+app.use('/api/tts', ttsRoutes);
 
 // 404, then the terminal error handler — both must stay last, in this order.
 app.use(notFoundHandler);

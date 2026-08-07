@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useMemo, useState } from 'react'
 import type { GeneratedQuestion, CvAnalysis } from '@/services/api'
+import type { ModeId } from '@/constants/modes'
 
 /**
  * The question set for the session currently being taken.
@@ -13,6 +14,8 @@ import type { GeneratedQuestion, CvAnalysis } from '@/services/api'
 
 type ActiveSession = {
   sessionId: string | null
+  /** Which mode produced it. Screens must not show it under another mode. */
+  modeId: ModeId
   questions: GeneratedQuestion[]
   /** Zero-based index of the question being asked. */
   currentIndex: number
@@ -44,6 +47,7 @@ type Ctx = {
   currentIsFollowUp: boolean
   start: (session: {
     sessionId: string | null
+    modeId: ModeId
     questions: GeneratedQuestion[]
     source?: string | null
     secondarySource?: string | null
@@ -73,9 +77,10 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       total: questions.length,
       currentIsFollowUp: session?.followUpIndices.includes(index) ?? false,
 
-      start: ({ sessionId, questions: qs, source = null, secondarySource = null }) =>
+      start: ({ sessionId, modeId, questions: qs, source = null, secondarySource = null }) =>
         setSession({
           sessionId,
+          modeId,
           questions: qs,
           currentIndex: 0,
           followUpIndices: [],

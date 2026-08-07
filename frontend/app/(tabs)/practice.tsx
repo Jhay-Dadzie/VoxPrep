@@ -110,6 +110,7 @@ export default function Practice() {
       })
       start({
         sessionId: result.sessionId,
+        modeId,
         questions: result.questions,
         source: text,
         secondarySource: secondaryText || null,

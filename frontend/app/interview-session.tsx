@@ -18,10 +18,10 @@ import { useMode } from '@/hooks/mode-context'
 import { useInterviewer } from '@/hooks/interviewer-context'
 import { useSession } from '@/hooks/session-context'
 import { submitAnswer, completeSession, ApiError } from '@/services/api'
-import { speakQuestion, stopSpeaking } from '@/services/speech'
+import { speakQuestion, stopSpeaking, prefetchQuestion, clearPrefetched } from '@/services/speech'
 import * as FileSystem from 'expo-file-system/legacy'
 import { Colors } from '@/constants/theme'
-import type { Panelist } from '@/constants/interviewers'
+import { avatarSource, shortName, type Panelist } from '@/constants/interviewers'
 
 const BAR_COUNT = 12
 
@@ -142,6 +142,7 @@ export default function InterviewSession() {
     })()
     return () => {
       stopSpeaking()
+      clearPrefetched()
       ;(async () => {
         try {
           await recorder.stop()
@@ -244,10 +245,26 @@ export default function InterviewSession() {
       setSeconds(0)
       setPhase('ready')
     },
-    // recorder is stable for the life of the screen.
+    // Deliberately does NOT depend on session. It is recreated on every
+    // session change if it does, which re-runs the ask effect below and
+    // resets the phase — the interview then sticks on question one.
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [asker],
   )
+
+  /**
+   * Fetch the next question's audio while this one is being answered.
+   *
+   * Kept out of askQuestion so that looking ahead into the session does not
+   * make asking depend on session state.
+   */
+  useEffect(() => {
+    const index = session?.currentIndex ?? 0
+    const upcoming = session?.questions[index + 1]
+    // Safe to re-run: prefetchQuestion ignores anything already cached or
+    // already in flight, so a new questions array costs nothing.
+    if (upcoming) prefetchQuestion(upcoming.question_text, asker)
+  }, [session?.currentIndex, session?.questions, asker])
 
   /** Open the mic. Switches the audio session back to record mode first. */
   const startRecording = async () => {
@@ -274,6 +291,10 @@ export default function InterviewSession() {
     // Splice the follow-up in now so Next lands on it, while the answer that
     // prompted it is still what the interview is about.
     if (result?.followUp) {
+      // A follow-up cannot be prefetched — it did not exist until now — but
+      // starting it here overlaps synthesis with the user reading the screen.
+      prefetchQuestion(result.followUp.question_text, asker)
+
       insertFollowUp({
         // The id comes from the server now — without it the follow-up's own
         // answer has nothing to attach to.
@@ -462,7 +483,7 @@ export default function InterviewSession() {
             </View>
           ) : (
             <View style={styles.aiAvatarWrap}>
-              <Image source={{ uri: interviewer.members[0].avatar }} style={styles.aiAvatar} />
+              <Image source={avatarSource(interviewer.members[0])} style={styles.aiAvatar} />
               <View style={[styles.statusDot, { borderColor: colors.card }]} />
             </View>
           )}
@@ -613,7 +634,7 @@ function PanelSeat({
     <View style={styles.seat}>
       <View style={styles.seatAvatarWrap}>
         <Image
-          source={{ uri: member.avatar }}
+          source={avatarSource(member)}
           style={[
             styles.seatAvatar,
             active && { borderWidth: 2, borderColor: colors.tint },
@@ -622,7 +643,7 @@ function PanelSeat({
         {active && <View style={[styles.seatDot, { borderColor: colors.card }]} />}
       </View>
       <ThemedText style={[styles.seatName, { color: colors.oppositeColor }]} numberOfLines={1}>
-        {member.name.split(' ')[0]}
+        {shortName(member)}
       </ThemedText>
       <ThemedText style={[styles.seatRole, { color: colors.muted }]} numberOfLines={1}>
         {member.role}

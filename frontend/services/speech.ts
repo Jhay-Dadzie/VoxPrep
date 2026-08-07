@@ -1,5 +1,8 @@
 import * as Speech from 'expo-speech'
+import { createAudioPlayer } from 'expo-audio'
+import * as FileSystem from 'expo-file-system/legacy'
 import type { Panelist } from '@/constants/interviewers'
+import { speakQuestionRemote } from '@/services/api'
 
 /**
  * Reading questions aloud.
@@ -97,7 +100,199 @@ async function settingsFor(member: Panelist | null): Promise<Speech.SpeechOption
  * Resolves rather than rejects on error: a failed voice should not stop the
  * interview, it should just mean the question is read silently.
  */
+/**
+ * Audio already fetched and written to disk, keyed by question text.
+ *
+ * Cloud synthesis takes around five seconds, which is a long silence to sit
+ * through before every question. Fetching the next one while the candidate is
+ * still answering the current one hides that entirely.
+ */
+const prefetched = new Map<string, string>()
+
+/** In-flight prefetches, so the same question is never fetched twice. */
+const inFlight = new Map<string, Promise<string | null>>()
+
+/**
+ * Questions the cloud voice already refused.
+ *
+ * Without this, a failed fetch is retried on every re-render — which burns
+ * quota, floods the server log, and costs the user a five second timeout
+ * before device speech takes over each time.
+ */
+const failed = new Set<string>()
+
+/**
+ * Consecutive cloud failures. Past the limit the whole session stops trying
+ * and goes straight to device speech.
+ *
+ * An exhausted daily quota does not recover within a session, so continuing to
+ * ask adds a five second silence before every single question.
+ */
+let consecutiveFailures = 0
+const FAILURE_LIMIT = 2
+
+function cloudUnavailable(): boolean {
+  return consecutiveFailures >= FAILURE_LIMIT
+}
+
 export async function speakQuestion(text: string, member: Panelist | null): Promise<void> {
+  // Try the cloud voice first; fall through to the device on any failure.
+  if (member && (await speakRemote(text, member))) return
+  await speakOnDevice(text, member)
+}
+
+/**
+ * Fetch a question's audio ahead of time.
+ *
+ * Fire and forget — the caller does not wait, and a failure simply means the
+ * question is synthesised on demand or spoken by the device instead.
+ */
+export function prefetchQuestion(text: string, member: Panelist | null): void {
+  if (!member || !text.trim()) return
+  if (prefetched.has(text) || inFlight.has(text)) return
+  // Already refused, or the cloud voice has given up for this session.
+  if (failed.has(text) || cloudUnavailable()) return
+
+  const task = fetchAudioFile(text, member)
+    .then((path) => {
+      if (path) prefetched.set(text, path)
+      return path
+    })
+    .catch(() => null)
+    .finally(() => inFlight.delete(text))
+
+  inFlight.set(text, task)
+}
+
+/** Drop cached audio and its files. Call when a session ends. */
+export async function clearPrefetched(): Promise<void> {
+  const paths = [...prefetched.values()]
+  prefetched.clear()
+  inFlight.clear()
+  // Reset the breaker: a new session may run after a quota window has rolled
+  // over, so it deserves a fresh attempt at the cloud voice.
+  failed.clear()
+  consecutiveFailures = 0
+  await Promise.all(
+    paths.map((p) => FileSystem.deleteAsync(p, { idempotent: true }).catch(() => {})),
+  )
+}
+
+/**
+ * Synthesise a question and write it to a local file.
+ *
+ * Returns null when no cloud voice is available, which the caller reads as
+ * "use device speech".
+ */
+async function fetchAudioFile(text: string, member: Panelist): Promise<string | null> {
+  const result = await speakQuestionRemote({
+    text,
+    panelistVoiceId: member.voiceId,
+    gender: member.gender,
+  })
+
+  if (!result.available || !result.audioBase64) {
+    // Remember the refusal so this question is not asked for again, and count
+    // it toward giving up on the cloud voice for the rest of the session.
+    failed.add(text)
+    consecutiveFailures += 1
+    return null
+  }
+
+  consecutiveFailures = 0
+
+  // The extension must match the format — providers differ (ElevenLabs returns
+  // mp3, Gemini wav) and a mislabelled file fails to play.
+  const ext = result.mimeType?.includes('wav') ? 'wav' : 'mp3'
+  const path = `${FileSystem.cacheDirectory}q-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`
+
+  await FileSystem.writeAsStringAsync(path, result.audioBase64, {
+    encoding: FileSystem.EncodingType.Base64,
+  })
+
+  return path
+}
+
+/** Currently playing cloud audio, so it can be stopped mid-question. */
+let activePlayer: ReturnType<typeof createAudioPlayer> | null = null
+
+/**
+ * Fetch and play a natural voice from the server.
+ *
+ * Returns false whenever anything at all goes wrong — no key, quota exhausted,
+ * network down, unplayable audio — so the caller silently uses device speech.
+ * The interview must never stall because a voice service is unavailable.
+ */
+async function speakRemote(text: string, member: Panelist): Promise<boolean> {
+  try {
+    // Already prefetched, or being prefetched right now — wait on that rather
+    // than starting a second identical request.
+    let path = prefetched.get(text) ?? null
+    if (!path && inFlight.has(text)) {
+      path = (await inFlight.get(text)) ?? null
+    }
+
+    // Nothing cached, and asking again would just cost another timeout before
+    // the device voice takes over anyway.
+    if (!path && (failed.has(text) || cloudUnavailable())) return false
+
+    if (!path) {
+      path = await fetchAudioFile(text, member)
+    }
+
+    if (!path) return false
+
+    // Keep it: Replay Question then costs nothing, and clearPrefetched()
+    // removes the file when the session ends.
+    prefetched.set(text, path)
+
+    await playFile(path)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** Play a local audio file, resolving when it finishes. */
+function playFile(uri: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    let player: ReturnType<typeof createAudioPlayer>
+    try {
+      player = createAudioPlayer(uri)
+    } catch (err) {
+      reject(err)
+      return
+    }
+
+    activePlayer = player
+    let settled = false
+
+    const finish = () => {
+      if (settled) return
+      settled = true
+      activePlayer = null
+      try {
+        player.remove()
+      } catch {
+        /* already released */
+      }
+      resolve()
+    }
+
+    player.addListener('playbackStatusUpdate', (status: any) => {
+      if (status?.didJustFinish) finish()
+    })
+
+    // A question that somehow never reports completion must not hang the
+    // interview: cap it well past any realistic question length.
+    setTimeout(finish, 60_000)
+
+    player.play()
+  })
+}
+
+/** The built-in synthesiser. Free, instant, and always available. */
+async function speakOnDevice(text: string, member: Panelist | null): Promise<void> {
   const options = await settingsFor(member)
 
   return new Promise((resolve) => {
@@ -122,12 +317,20 @@ export async function speakQuestion(text: string, member: Panelist | null): Prom
   })
 }
 
+/** Stops both paths — whichever one happens to be speaking. */
 export function stopSpeaking() {
   try {
     Speech.stop()
   } catch {
     /* nothing was speaking */
   }
+  try {
+    activePlayer?.pause()
+    activePlayer?.remove()
+  } catch {
+    /* already released */
+  }
+  activePlayer = null
 }
 
 export async function isSpeaking(): Promise<boolean> {

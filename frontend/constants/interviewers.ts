@@ -12,6 +12,8 @@
  * or licensed portraits before release.
  */
 
+import type { ImageSourcePropType } from 'react-native'
+
 export type Gender = 'male' | 'female'
 
 export type InterviewerId =
@@ -29,7 +31,32 @@ export type Panelist = {
   gender: Gender
   /** Seat on the panel — shown under the avatar during a session. */
   role: string
-  avatar: string
+  /**
+   * A bundled image via require(), or a URL string.
+   *
+   * Both are allowed so portraits can be replaced one at a time rather than
+   * all ten at once. Render with avatarSource() — a bundled asset and a remote
+   * URL need different shapes on <Image>.
+   */
+  avatar: ImageSourcePropType | string
+}
+
+/** Normalise either avatar form into something <Image source={...}> accepts. */
+export function avatarSource(panelist: Panelist): ImageSourcePropType {
+  return typeof panelist.avatar === 'string' ? { uri: panelist.avatar } : panelist.avatar
+}
+
+const TITLES = /^(dr|prof|professor|mr|mrs|ms|miss)\.?$/i
+
+/**
+ * The name to show under a small avatar.
+ *
+ * Naively taking the first word would render "Dr." for a titled panelist, so
+ * titles are skipped. Hyphenated names stay intact.
+ */
+export function shortName(panelist: Panelist): string {
+  const parts = panelist.name.split(' ').filter(Boolean)
+  return parts.find((part) => !TITLES.test(part)) ?? panelist.name
 }
 
 export type Interviewer = {
@@ -46,20 +73,22 @@ export type Interviewer = {
   members: Panelist[]
 }
 
-const SARAH: Panelist = {
+// Relative rather than the "@/" alias: require() for assets is resolved by
+// Metro at bundle time, which does not read the TypeScript path mapping.
+const ROSEMARY: Panelist = {
   voiceId: 'f_warm_01',
-  name: 'Sarah Chen',
+  name: 'Dr. Rose-Mary',
   gender: 'female',
   role: 'Chair',
-  avatar: 'https://i.pravatar.cc/200?img=47',
+  avatar: require('../assets/images/rosemary.png'),
 }
 
-const JAMES: Panelist = {
+const BENJAMIN: Panelist = {
   voiceId: 'm_measured_01',
-  name: 'James Carter',
+  name: 'Dr. Benjamin Partey',
   gender: 'male',
   role: 'Interviewer',
-  avatar: 'https://i.pravatar.cc/200?img=13',
+  avatar: require('../assets/images/benjamin.png'),
 }
 
 const MARCUS: Panelist = {
@@ -134,7 +163,7 @@ export const INTERVIEWERS: Record<InterviewerId, Interviewer> = {
     icon: 'person-outline',
     isPanel: false,
     listeningLabel: 'AI Interviewer Listening',
-    members: [JAMES],
+    members: [BENJAMIN],
   },
 
   single_female: {
@@ -144,7 +173,7 @@ export const INTERVIEWERS: Record<InterviewerId, Interviewer> = {
     icon: 'person-outline',
     isPanel: false,
     listeningLabel: 'AI Interviewer Listening',
-    members: [{ ...SARAH, role: 'Interviewer' }],
+    members: [{ ...ROSEMARY, role: 'Interviewer' }],
   },
 
   // The smallest panel: one of each, and the gentlest step up from a one-on-one.
@@ -165,7 +194,7 @@ export const INTERVIEWERS: Record<InterviewerId, Interviewer> = {
     icon: 'people-outline',
     isPanel: true,
     listeningLabel: 'AI Panel Listening',
-    members: [SARAH, MARCUS, PRIYA],
+    members: [ROSEMARY, MARCUS, PRIYA],
   },
 
   // Same size as panel_three, opposite gender balance. Kept as a separate
@@ -187,21 +216,22 @@ export const INTERVIEWERS: Record<InterviewerId, Interviewer> = {
     icon: 'people-circle-outline',
     isPanel: true,
     listeningLabel: 'AI Panel Listening',
-    members: [SARAH, MARCUS, PRIYA, DAVID],
+    members: [ROSEMARY, MARCUS, PRIYA, DAVID],
   },
 }
 
 /** Picker order — singles first, then panels by size, easiest to hardest. */
 export const INTERVIEWER_LIST: Interviewer[] = [
-  INTERVIEWERS.single_female,
   INTERVIEWERS.single_male,
+  INTERVIEWERS.single_female,
   INTERVIEWERS.panel_two,
   INTERVIEWERS.panel_three,
   INTERVIEWERS.panel_three_alt,
   INTERVIEWERS.panel_four,
 ]
 
-export const DEFAULT_INTERVIEWER: InterviewerId = 'single_female'
+/** Matches the first entry in INTERVIEWER_LIST, so the picker opens on it. */
+export const DEFAULT_INTERVIEWER: InterviewerId = 'single_male'
 
 export function isValidInterviewer(id: string | null | undefined): id is InterviewerId {
   return !!id && id in INTERVIEWERS

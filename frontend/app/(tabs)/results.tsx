@@ -11,6 +11,7 @@ import { useMode } from '@/hooks/mode-context'
 import { useSession } from '@/hooks/session-context'
 import {
   fetchSessionResults,
+  fetchOverview,
   generateQuestions,
   analyseCv,
   ApiError,
@@ -39,7 +40,42 @@ export default function Results() {
   const [cvChecking, setCvChecking] = useState(false)
   const [loadError, setLoadError] = useState<string | null>(null)
 
-  const sessionId = session?.sessionId ?? null
+  /**
+   * Which session these results describe.
+   *
+   * The in-memory session is only valid for the mode that produced it —
+   * otherwise finishing an oral exam and switching to Job Interview left the
+   * exam's scores on screen under the wrong heading. When it does not match,
+   * fall back to the newest session in the current mode, so each mode shows
+   * its own most recent feedback.
+   */
+  const [fallbackId, setFallbackId] = useState<string | null>(null)
+  const liveId = session?.modeId === modeId ? (session?.sessionId ?? null) : null
+  const sessionId = liveId ?? fallbackId
+
+  useEffect(() => {
+    // Drop the previous mode's results the moment the mode changes.
+    setResults(null)
+    setFallbackId(null)
+    setLoadError(null)
+
+    if (liveId) return
+
+    let cancelled = false
+    fetchOverview(modeId)
+      .then((data) => {
+        if (cancelled) return
+        const newest = data.recent.find((s) => s.questionsAnswered > 0) ?? data.recent[0] ?? null
+        setFallbackId(newest?.id ?? null)
+      })
+      .catch(() => {
+        if (!cancelled) setFallbackId(null)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [modeId, liveId])
 
   // Refetch on focus rather than on mount: this is a tab, so it stays mounted
   // and would otherwise keep showing the previous session's scores.
@@ -80,8 +116,48 @@ export default function Results() {
   // No invented fallback: an unscored session shows a dash, not a plausible number.
   const scorePct = overall?.score != null ? Math.round(overall.score) : null
   const answered = results?.questions.filter((q) => q.answered) ?? []
+  const unanswered = results ? Math.max(0, results.totalQuestions - results.questionsAnswered) : 0
+  const incomplete = unanswered > 0
 
-  const cv = session?.cvAnalysis ?? null
+  /**
+   * Answers that have been transcribed but not yet scored.
+   *
+   * Scoring runs in the background after each answer, so opening this screen
+   * straight after an interview can find results that are still filling in.
+   */
+  const pendingScores = answered.filter((q) => !q.scores).length
+
+  /**
+   * Poll until the outstanding scores land.
+   *
+   * Bounded rather than indefinite: if scoring failed upstream the scores are
+   * never coming, and a screen that polls forever would burn battery and hide
+   * the failure behind a permanent spinner.
+   */
+  useEffect(() => {
+    if (!sessionId || pendingScores === 0) return
+
+    const deadline = Date.now() + SCORING_POLL_TIMEOUT_MS
+    const timer = setInterval(async () => {
+      if (Date.now() > deadline) {
+        clearInterval(timer)
+        return
+      }
+      try {
+        setResults(await fetchSessionResults(sessionId))
+      } catch {
+        // Keep the last good data; the next tick may succeed.
+      }
+    }, SCORING_POLL_INTERVAL_MS)
+
+    return () => clearInterval(timer)
+    // pendingScores in the deps restarts the window as scores arrive, so steady
+    // progress is never cut off by the timeout.
+  }, [sessionId, pendingScores])
+
+  // Same rule: the analysis belongs to the session that produced it, so it must
+  // not survive a mode switch onto results for a different mode.
+  const cv = liveId ? (session?.cvAnalysis ?? null) : null
   // Only worth showing when the CV would actually cost them the role. A CV that
   // already fits gets no unsolicited advice.
   const showCvPrompt = cv !== null && !cv.matchesRole
@@ -92,6 +168,9 @@ export default function Results() {
    * Skipped entirely unless this mode takes a CV and one was supplied.
    */
   useEffect(() => {
+    // Only for the session actually in progress in this mode — the stored
+    // documents belong to whichever mode created them.
+    if (!liveId) return
     if (!session?.source || !session?.secondarySource) return
     if (!mode.secondarySource) return
     if (session.cvAnalysis || cvChecking) return
@@ -149,6 +228,7 @@ export default function Results() {
       })
       start({
         sessionId: fresh.sessionId,
+        modeId,
         questions: fresh.questions,
         source,
         secondarySource: session?.secondarySource ?? null,
@@ -248,7 +328,11 @@ export default function Results() {
         </ThemedText>
 
         <View style={[styles.scoreCard, { backgroundColor: colors.card }]}>
-          <ThemedText style={[styles.scoreTag, { color: colors.subtext }]}>OVERALL PERFORMANCE</ThemedText>
+          {/* The score averages the answers actually given, so it must not be
+              labelled as if it graded the whole session. */}
+          <ThemedText style={[styles.scoreTag, { color: colors.subtext }]}>
+            {incomplete ? 'AVERAGE OF ANSWERED QUESTIONS' : 'OVERALL PERFORMANCE'}
+          </ThemedText>
           <View style={[styles.ring, { borderColor: colors.tint }]}>
             {loading ? (
               <ActivityIndicator color={colors.tint} />
@@ -265,16 +349,41 @@ export default function Results() {
               </ThemedText>
             </View>
           ) : (
-            <View style={[styles.goodPill, { backgroundColor: colors.brandSoft }]}>
+            <View style={[styles.goodPill, styles.scoringPill, { backgroundColor: colors.brandSoft }]}>
+              <ActivityIndicator size="small" color={colors.tint} />
               <ThemedText style={[styles.goodPillText, { color: colors.tint }]}>
-                Scoring in progress
+                {pendingScores > 0 ? 'Scoring your answers…' : 'Not scored'}
               </ThemedText>
             </View>
           )}
           {results && (
-            <ThemedText style={{ color: colors.muted, fontSize: 12, marginTop: 10 }}>
-              {results.questionsAnswered} of {results.totalQuestions} answered
-            </ThemedText>
+            <>
+              <ThemedText style={{ color: colors.muted, fontSize: 12, marginTop: 10 }}>
+                {results.questionsAnswered} of {results.totalQuestions} answered
+              </ThemedText>
+
+              {/* Some answers are still being graded — say so, rather than
+                  letting a partial average look like the final one. */}
+              {pendingScores > 0 && (
+                <View style={[styles.incompletePill, { backgroundColor: colors.brandSoft }]}>
+                  <ActivityIndicator size="small" color={colors.tint} />
+                  <ThemedText style={[styles.incompleteText, { color: colors.tint }]}>
+                    Scoring {pendingScores} more answer{pendingScores === 1 ? '' : 's'}…
+                  </ThemedText>
+                </View>
+              )}
+
+              {/* Without this an 84% off two answers out of ten reads as if the
+                  whole session had been graded. */}
+              {incomplete && (
+                <View style={[styles.incompletePill, { backgroundColor: colors.warningBg }]}>
+                  <Ionicons name="alert-circle-outline" size={13} color={colors.warning} />
+                  <ThemedText style={[styles.incompleteText, { color: colors.warning }]}>
+                    Incomplete — {unanswered} question{unanswered === 1 ? '' : 's'} not attempted
+                  </ThemedText>
+                </View>
+              )}
+            </>
           )}
         </View>
 
@@ -594,6 +703,12 @@ function formatDuration(seconds: number) {
   return m > 0 ? `${m}m ${s}s` : `${s}s`
 }
 
+/** How often to re-check for scores that are still being generated. */
+const SCORING_POLL_INTERVAL_MS = 4000
+
+/** Give up after this long — scoring that has failed will never arrive. */
+const SCORING_POLL_TIMEOUT_MS = 90_000
+
 const RING = 150
 
 const styles = StyleSheet.create({
@@ -612,6 +727,12 @@ const styles = StyleSheet.create({
   },
   ringNum: { fontSize: 30, fontWeight: '800', lineHeight: 36, includeFontPadding: false, textAlignVertical: 'center' },
   goodPill: { paddingHorizontal: 14, paddingVertical: 6, borderRadius: 999 },
+  incompletePill: {
+    flexDirection: 'row', alignItems: 'center', gap: 5,
+    paddingHorizontal: 10, paddingVertical: 5, borderRadius: 999, marginTop: 10,
+  },
+  incompleteText: { fontSize: 11, fontWeight: '700' },
+  scoringPill: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   goodPillText: { fontWeight: '700', fontSize: 13 },
 
   deliveryRow: { flexDirection: 'row', gap: 12, marginBottom: 16 },

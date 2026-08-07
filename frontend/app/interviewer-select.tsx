@@ -11,6 +11,8 @@ import { Colors } from '@/constants/theme'
 import {
   INTERVIEWER_LIST,
   describeComposition,
+  avatarSource,
+  shortName,
   type InterviewerId,
   type Panelist,
 } from '@/constants/interviewers'
@@ -153,9 +155,9 @@ export default function InterviewerSelect() {
 function MemberChip({ member, colors }: { member: Panelist; colors: any }) {
   return (
     <View style={styles.member}>
-      <Image source={{ uri: member.avatar }} style={styles.memberAvatar} />
+      <Image source={avatarSource(member)} style={styles.memberAvatar} />
       <ThemedText style={[styles.memberName, { color: colors.oppositeColor }]} numberOfLines={1}>
-        {member.name.split(' ')[0]}
+        {shortName(member)}
       </ThemedText>
       <ThemedText style={[styles.memberRole, { color: colors.muted }]} numberOfLines={1}>
         {member.role}

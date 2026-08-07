@@ -1,5 +1,15 @@
-import React, { useCallback, useEffect, useState } from 'react'
-import { StyleSheet, View, ScrollView, Pressable, ActivityIndicator, RefreshControl } from 'react-native'
+import React, { useCallback, useEffect, useRef, useState } from 'react'
+import {
+  StyleSheet,
+  View,
+  ScrollView,
+  Pressable,
+  ActivityIndicator,
+  RefreshControl,
+  Animated,
+  Easing,
+} from 'react-native'
+import { LinearGradient } from 'expo-linear-gradient'
 import { Ionicons } from '@expo/vector-icons'
 import { router, useFocusEffect } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
@@ -15,6 +25,9 @@ import {
   type SessionResults,
 } from '@/services/api'
 import { Colors } from '@/constants/theme'
+
+/** Chart plot height. Bars animate to a pixel fraction of this. */
+const PLOT_HEIGHT = 130
 
 /**
  * Progress over time, for the active mode only.
@@ -134,30 +147,63 @@ export default function Progress() {
           </View>
         )}
 
-        <View style={styles.statRow}>
-          <StatTile
-            value={String(overview?.completedSessions ?? 0)}
-            label={copy.sessionsCompletedLabel}
-            colors={colors}
-          />
-          <StatTile
-            value={average != null ? `${Math.round(average)}%` : '—'}
-            label="Average score"
-            colors={colors}
-          />
-          <StatTile
-            value={overview?.bestScore != null ? `${Math.round(overview.bestScore)}%` : '—'}
-            label="Personal best"
-            colors={colors}
-          />
-        </View>
-
-        <View style={[styles.scopeRow, { backgroundColor: colors.card }]}>
-          <Ionicons name={mode.icon as any} size={14} color={colors.tint} />
-          <ThemedText style={{ color: colors.subtext, fontSize: 12, flex: 1 }}>
-            {mode.label} progress only
+        <View style={styles.scopeRow}>
+          <Ionicons name={mode.icon as any} size={13} color={colors.muted} />
+          <ThemedText style={{ color: colors.muted, fontSize: 11, fontWeight: '600', letterSpacing: 0.4 }}>
+            {mode.label.toUpperCase()}
           </ThemedText>
         </View>
+
+        {/* The headline number deserves weight — a flat row of three equal
+            tiles gave the average no more prominence than the session count. */}
+        <LinearGradient
+          colors={[colors.tint, '#7A4CF0']}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={styles.hero}
+        >
+          <View style={styles.heroTop}>
+            <View>
+              <ThemedText style={styles.heroLabel}>AVERAGE SCORE</ThemedText>
+              <View style={styles.heroValueRow}>
+                <ThemedText style={styles.heroValue}>
+                  {average != null ? Math.round(average) : '—'}
+                </ThemedText>
+                {average != null && <ThemedText style={styles.heroPercent}>%</ThemedText>}
+              </View>
+            </View>
+
+            {hasHistory && (
+              <View style={styles.heroDelta}>
+                <Ionicons
+                  name={scores[scores.length - 1] >= scores[0] ? 'trending-up' : 'trending-down'}
+                  size={16}
+                  color="#fff"
+                />
+                <ThemedText style={styles.heroDeltaText}>
+                  {scores[scores.length - 1] >= scores[0] ? '+' : ''}
+                  {Math.round(scores[scores.length - 1] - scores[0])} pts
+                </ThemedText>
+              </View>
+            )}
+          </View>
+
+          <View style={styles.heroFooter}>
+            <HeroStat
+              icon="checkmark-done"
+              value={String(overview?.completedSessions ?? 0)}
+              label={copy.sessionsCompletedLabel}
+            />
+            <View style={styles.heroDivider} />
+            <HeroStat
+              icon="trophy"
+              value={overview?.bestScore != null ? `${Math.round(overview.bestScore)}%` : '—'}
+              label="Personal best"
+            />
+          </View>
+
+          <Ionicons name={mode.icon as any} size={110} color="#ffffff14" style={styles.heroGlyph} />
+        </LinearGradient>
 
         {hasHistory ? (
           <View style={[styles.chartCard, { backgroundColor: colors.card }]}>
@@ -217,13 +263,17 @@ function Header({ colors }: { colors: any }) {
   )
 }
 
-function StatTile({ value, label, colors }: { value: string; label: string; colors: any }) {
+/** Secondary figure inside the gradient hero. */
+function HeroStat({ icon, value, label }: { icon: any; value: string; label: string }) {
   return (
-    <View style={[styles.statTile, { backgroundColor: colors.card }]}>
-      <ThemedText style={[styles.statValue, { color: colors.tint }]}>{value}</ThemedText>
-      <ThemedText style={[styles.statLabel, { color: colors.subtext }]} numberOfLines={2}>
-        {label}
-      </ThemedText>
+    <View style={styles.heroStat}>
+      <Ionicons name={icon} size={14} color="#ffffffcc" />
+      <View>
+        <ThemedText style={styles.heroStatValue}>{value}</ThemedText>
+        <ThemedText style={styles.heroStatLabel} numberOfLines={1}>
+          {label}
+        </ThemedText>
+      </View>
     </View>
   )
 }
@@ -243,35 +293,91 @@ function TrendPill({ first, latest, colors }: { first: number; latest: number; c
 
 /** Bar per session, with the average drawn across as a dashed line. */
 function ScoreChart({ scores, average, colors }: { scores: number[]; average: number | null; colors: any }) {
+  const latest = scores.length - 1
   return (
     <View>
       <View style={styles.plot}>
+        {/* Quiet reference lines: without them the bars float and the chart
+            reads as decoration rather than data. */}
+        {[25, 50, 75].map((y) => (
+          <View key={y} style={[styles.gridLine, { bottom: `${y}%`, backgroundColor: colors.border }]} />
+        ))}
+
         {average != null && (
           <View style={[styles.averageLine, { bottom: `${average}%`, borderColor: colors.muted }]} />
         )}
+
         {scores.map((score, i) => (
-          <View key={i} style={styles.barSlot}>
-            <View
-              style={[
-                styles.bar,
-                {
-                  height: `${Math.max(2, Math.min(100, score))}%`,
-                  backgroundColor: i === scores.length - 1 ? colors.tint : colors.brandSoft,
-                },
-              ]}
-            />
-          </View>
+          <Bar
+            key={i}
+            score={score}
+            index={i}
+            isLatest={i === latest}
+            colors={colors}
+          />
         ))}
       </View>
+
       <View style={styles.axisRow}>
         <ThemedText style={[styles.axisText, { color: colors.muted }]}>Oldest</ThemedText>
         {average != null && (
-          <ThemedText style={[styles.axisText, { color: colors.muted }]}>
-            Average {Math.round(average)}%
-          </ThemedText>
+          <View style={styles.axisAvg}>
+            <View style={[styles.axisDash, { borderColor: colors.muted }]} />
+            <ThemedText style={[styles.axisText, { color: colors.muted }]}>
+              avg {Math.round(average)}%
+            </ThemedText>
+          </View>
         )}
         <ThemedText style={[styles.axisText, { color: colors.muted }]}>Latest</ThemedText>
       </View>
+    </View>
+  )
+}
+
+/**
+ * One bar, growing from the baseline on mount.
+ *
+ * Staggered by index so the chart reads left to right as it appears, which
+ * matches how the data is meant to be read. Uses the native driver, so the
+ * animation runs off the JS thread and stays smooth while results load.
+ */
+function Bar({
+  score, index, isLatest, colors,
+}: { score: number; index: number; isLatest: boolean; colors: any }) {
+  const grow = useRef(new Animated.Value(0)).current
+
+  // Pixels rather than a percentage: height is animated directly, because
+  // scaleY would grow the bar outward from its centre instead of up from the
+  // axis, and there is no transform-origin in React Native.
+  const target = (Math.max(2, Math.min(100, score)) / 100) * PLOT_HEIGHT
+
+  useEffect(() => {
+    Animated.timing(grow, {
+      toValue: target,
+      duration: 520,
+      delay: index * 45,
+      easing: Easing.out(Easing.cubic),
+      // Height is a layout property, so this cannot run on the native thread.
+      // Fine here: a handful of bars animating once on mount.
+      useNativeDriver: false,
+    }).start()
+  }, [grow, index, target])
+
+  return (
+    <View style={styles.barSlot}>
+      {isLatest && (
+        <ThemedText style={[styles.barValue, { color: colors.tint }]}>
+          {Math.round(score)}
+        </ThemedText>
+      )}
+      <Animated.View style={[styles.barWrap, { height: grow }]}>
+        <LinearGradient
+          colors={isLatest ? [colors.tint, '#7A4CF0'] : [colors.brandSoft, colors.brandSoft]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 0, y: 1 }}
+          style={styles.bar}
+        />
+      </Animated.View>
     </View>
   )
 }
@@ -296,6 +402,13 @@ function SessionRow({
 
   return (
     <View style={[styles.sessionCard, { backgroundColor: colors.card }]}>
+      {/* A colour rail makes the score scannable down the list without
+          reading every pill. */}
+      <View style={[styles.sessionRail, { backgroundColor: tone }]} />
+
+      {/* Column beside the rail: the header and any expanded detail stack
+          vertically while the rail runs the full height. */}
+      <View style={styles.sessionBody}>
       <Pressable
         onPress={onPress}
         accessibilityRole="button"
@@ -306,10 +419,16 @@ function SessionRow({
           <ThemedText style={[styles.sessionTitle, { color: colors.oppositeColor }]} numberOfLines={1}>
             {session.title}
           </ThemedText>
-          <ThemedText style={[styles.sessionMeta, { color: colors.subtext }]}>
-            {session.status === 'completed' ? 'Completed' : 'In progress'} ·{' '}
-            {session.questionsAnswered}/{session.totalQuestions} answered
-          </ThemedText>
+          <View style={styles.sessionMetaRow}>
+            <Ionicons
+              name={session.status === 'completed' ? 'checkmark-circle' : 'time-outline'}
+              size={12}
+              color={colors.muted}
+            />
+            <ThemedText style={[styles.sessionMeta, { color: colors.subtext }]}>
+              {session.questionsAnswered}/{session.totalQuestions} answered
+            </ThemedText>
+          </View>
         </View>
         <View style={[styles.scorePill, { backgroundColor: toneBg }]}>
           <ThemedText style={[styles.scorePillText, { color: tone }]}>
@@ -334,6 +453,7 @@ function SessionRow({
           ))}
         </View>
       )}
+      </View>
     </View>
   )
 }
@@ -379,8 +499,6 @@ function AnswerBlock({ q, colors }: { q: SessionResults['questions'][number]; co
   )
 }
 
-const PLOT_HEIGHT = 130
-
 const styles = StyleSheet.create({
   header: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20, paddingVertical: 14, borderBottomWidth: 1 },
   headerTitle: { fontSize: 16, fontWeight: '700' },
@@ -393,12 +511,30 @@ const styles = StyleSheet.create({
   emptyBody: { fontSize: 14, lineHeight: 20, textAlign: 'center', marginTop: 6, marginBottom: 22 },
   emptyCta: { borderRadius: 999, paddingHorizontal: 28, paddingVertical: 14 },
 
-  statRow: { flexDirection: 'row', gap: 10, marginBottom: 12 },
-  statTile: { flex: 1, borderRadius: 14, padding: 14, alignItems: 'center' },
-  statValue: { fontSize: 21, fontWeight: '800' },
-  statLabel: { fontSize: 11, marginTop: 4, textAlign: 'center', lineHeight: 15 },
+  hero: { borderRadius: 20, padding: 20, marginBottom: 18, overflow: 'hidden' },
+  heroTop: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between' },
+  heroLabel: { color: '#ffffffb0', fontSize: 11, fontWeight: '700', letterSpacing: 1.2 },
+  heroValueRow: { flexDirection: 'row', alignItems: 'baseline', marginTop: 2 },
+  heroValue: { color: '#fff', fontSize: 46, fontWeight: '800', letterSpacing: -1.5, lineHeight: 52 },
+  heroPercent: { color: '#ffffffcc', fontSize: 20, fontWeight: '700', marginLeft: 2 },
+  heroDelta: {
+    flexDirection: 'row', alignItems: 'center', gap: 5,
+    backgroundColor: '#ffffff26', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 999,
+  },
+  heroDeltaText: { color: '#fff', fontSize: 12, fontWeight: '800' },
 
-  scopeRow: { flexDirection: 'row', alignItems: 'center', gap: 8, borderRadius: 10, padding: 12, marginBottom: 16 },
+  heroFooter: {
+    flexDirection: 'row', alignItems: 'center',
+    marginTop: 18, paddingTop: 14,
+    borderTopWidth: 1, borderTopColor: '#ffffff26',
+  },
+  heroDivider: { width: 1, height: 26, backgroundColor: '#ffffff26', marginHorizontal: 16 },
+  heroStat: { flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 },
+  heroStatValue: { color: '#fff', fontSize: 15, fontWeight: '800' },
+  heroStatLabel: { color: '#ffffffa0', fontSize: 10, marginTop: 1 },
+  heroGlyph: { position: 'absolute', right: -18, bottom: -22 },
+
+  scopeRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 10 },
 
   chartCard: { borderRadius: 14, padding: 18, marginBottom: 20 },
   chartHead: { flexDirection: 'row', alignItems: 'flex-start', marginBottom: 18 },
@@ -408,21 +544,31 @@ const styles = StyleSheet.create({
   deltaText: { fontSize: 12, fontWeight: '700' },
 
   plot: { height: PLOT_HEIGHT, flexDirection: 'row', alignItems: 'flex-end', gap: 6 },
+  gridLine: { position: 'absolute', left: 0, right: 0, height: 1, opacity: 0.5 },
   averageLine: { position: 'absolute', left: 0, right: 0, borderTopWidth: 1, borderStyle: 'dashed' },
-  barSlot: { flex: 1, height: '100%', justifyContent: 'flex-end' },
-  bar: { width: '100%', borderRadius: 4, minHeight: 3 },
+  barSlot: { flex: 1, height: '100%', justifyContent: 'flex-end', alignItems: 'center' },
+  // transformOrigin is not supported, so the wrapper is bottom-anchored and
+  // scaleY grows it upward from the baseline.
+  barWrap: { width: '100%', justifyContent: 'flex-end' },
+  bar: { width: '100%', height: '100%', borderTopLeftRadius: 5, borderTopRightRadius: 5, minHeight: 3 },
+  barValue: { fontSize: 10, fontWeight: '800', marginBottom: 3 },
 
-  axisRow: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 10 },
+  axisRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 10 },
   axisText: { fontSize: 11 },
+  axisAvg: { flexDirection: 'row', alignItems: 'center', gap: 5 },
+  axisDash: { width: 14, borderTopWidth: 1, borderStyle: 'dashed' },
 
   sectionTitle: { fontSize: 18, fontWeight: '800' },
   sectionCaption: { fontSize: 13, marginTop: 4, marginBottom: 12 },
 
-  sessionCard: { borderRadius: 14, marginBottom: 10, overflow: 'hidden' },
+  sessionCard: { borderRadius: 14, marginBottom: 10, overflow: 'hidden', flexDirection: 'row' },
+  sessionRail: { width: 3 },
+  sessionBody: { flex: 1 },
   sessionHead: { flexDirection: 'row', alignItems: 'center', gap: 10, padding: 14 },
   sessionTitle: { fontSize: 14, fontWeight: '700' },
-  sessionMeta: { fontSize: 12, marginTop: 2 },
-  scorePill: { paddingHorizontal: 9, paddingVertical: 4, borderRadius: 8 },
+  sessionMetaRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 3 },
+  sessionMeta: { fontSize: 12 },
+  scorePill: { minWidth: 46, alignItems: 'center', paddingHorizontal: 9, paddingVertical: 5, borderRadius: 8 },
   scorePillText: { fontSize: 13, fontWeight: '800' },
 
   detail: { borderTopWidth: 1, padding: 14, paddingTop: 12 },
