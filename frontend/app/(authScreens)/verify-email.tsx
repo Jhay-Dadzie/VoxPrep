@@ -12,7 +12,7 @@ import Button from '@/components/button'
 export default function VerifyEmail() {
   const colorScheme = useColorScheme()
   const colors = Colors[colorScheme ?? 'light']
-  const [digits, setDigits] = useState(['', '', '', '', '', ''])
+  const [digits, setDigits] = useState(['', '', '', '', '', '', '',''])
   const [seconds, setSeconds] = useState(120)
   const inputs = useRef<(TextInput | null)[]>([])
 
@@ -26,7 +26,7 @@ export default function VerifyEmail() {
     const next = [...digits]
     next[i] = v.slice(-1)
     setDigits(next)
-    if (v && i < 5) inputs.current[i + 1]?.focus()
+    if (v && i < 7) inputs.current[i + 1]?.focus()
   }
 
   const fillCount = digits.filter(Boolean).length
@@ -71,10 +71,10 @@ export default function VerifyEmail() {
           </View>
 
           <View style={[styles.progressBar, { backgroundColor: colors.border }]}>
-            <View style={[styles.progressFill, { width: `${(fillCount / 6) * 100}%`, backgroundColor: colors.tint }]} />
+            <View style={[styles.progressFill, { width: `${(fillCount / 8) * 100}%`, backgroundColor: colors.tint }]} />
           </View>
 
-          <Button action={() => router.replace('/(tabs)/dashboard')} disabled={fillCount < 6}>
+          <Button action={() => router.replace('/(tabs)/dashboard')} disabled={fillCount < 8}>
             <ThemedText type='placeholderText'>Verify Account</ThemedText>
           </Button>
 
