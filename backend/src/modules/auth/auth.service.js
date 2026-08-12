@@ -14,10 +14,13 @@ import {
   getCurrentTestUser,
   getTestGoogleOAuthUrl,
   loginTestUser,
+  changeTestUserPassword,
   logoutTestUser,
+  requestTestPasswordReset,
   shouldUseTestAuth,
   signupTestUser,
   verifyTestEmail,
+  verifyTestPasswordResetOtp,
 } from './auth.store.js';
 
 function getBaseUrl(envKey, fallbackPort) {
@@ -119,17 +122,42 @@ class AuthService {
         throw new Error(error.message || 'Failed to create user account');
       }
 
-      const { user, session } = data;
+      // Supabase returns the user at data.user. Keep the session fallback for
+      // clients/proxies that only expose it under data.session.user.
+      const user = data?.user || data?.session?.user;
+      const session = data?.session || null;
 
       if (!user) {
-        throw new Error('User not created');
+        // Supabase can intentionally omit the user object for an existing
+        // unconfirmed address while still sending the confirmation email.
+        // The client can verify using the email and OTP, so do not turn this
+        // pending-verification response into a 500.
+        if (!session) {
+          warn(`Signup pending verification for ${email}; user details were omitted by Supabase`);
+          return {
+            user: null,
+            session: null,
+            message: 'Verification email sent. Please confirm your email address.',
+          };
+        }
+
+        throw new Error('Signup completed without a user record');
       }
 
       // If email confirmation is required, session will be null
       if (!session) {
         info(`Signup pending verification for ${email}`);
         return {
-          user: { id: user.id, email: user.email, full_name, avatar_url: avatar_url || null },
+          user: {
+            id: user.id,
+            email: user.email,
+            full_name,
+            avatar_url: avatar_url || null,
+            is_active: true,
+            profile_completed: false,
+            created_at: user.created_at || new Date().toISOString(),
+            updated_at: user.updated_at || new Date().toISOString(),
+          },
           session: null,
           message: 'Verification email sent. Please confirm your email address.',
         };
@@ -157,6 +185,10 @@ class AuthService {
           email: user.email,
           full_name,
           avatar_url: avatar_url || generateRandomAvatarUrl(email, full_name),
+          is_active: true,
+          profile_completed: false,
+          created_at: user.created_at || new Date().toISOString(),
+          updated_at: user.updated_at || new Date().toISOString(),
         },
         session: {
           access_token: session.access_token,
@@ -223,9 +255,13 @@ class AuthService {
         user: {
           id: user.id,
           email: user.email,
-          full_name: userProfile?.full_name || null,
-          avatar_url: userProfile?.avatar_url || null,
-        },
+        full_name: userProfile?.full_name || null,
+        avatar_url: userProfile?.avatar_url || null,
+        is_active: userProfile?.is_active ?? true,
+        profile_completed: userProfile?.profile_completed ?? false,
+        created_at: userProfile?.created_at || user.created_at || new Date().toISOString(),
+        updated_at: userProfile?.updated_at || new Date().toISOString(),
+      },
         session: {
           access_token: session.access_token,
           refresh_token: session.refresh_token,
@@ -303,16 +339,16 @@ class AuthService {
   /**
    * Verify email using token from confirmation link
    */
-  async verifyEmail(token) {
+  async verifyEmail(token, email) {
     if (shouldUseTestAuth()) {
         return verifyTestEmail(token);
       }
 
     const supabase = getSupabaseClient();
-    const { data, error } = await supabase.auth.verifyOtp({
-      token_hash: token,
-      type: 'signup',
-    });
+    const verificationRequest = email
+      ? { email, token, type: 'email' }
+      : { token_hash: token, type: 'email' };
+    const { data, error } = await supabase.auth.verifyOtp(verificationRequest);
     if (error) throw new Error(error.message);
 
     // If email confirmation is enabled, create profile now with an avatar
@@ -336,6 +372,20 @@ class AuthService {
     }
 
     return { message: 'Email verified successfully' };
+  }
+
+  async resendVerification(email) {
+    if (shouldUseTestAuth()) {
+      return { message: 'Verification code sent' };
+    }
+
+    const supabase = getSupabaseClient();
+    const { error } = await supabase.auth.resend({ type: 'signup', email });
+    if (error) {
+      throw new Error(error.message || 'Could not resend verification code');
+    }
+
+    return { message: 'Verification code sent' };
   }
 
   async logout(accessToken, userId) {
@@ -371,53 +421,71 @@ class AuthService {
   async forgotPassword(email) {
     try {
       if (shouldUseTestAuth()) {
-        return { message: 'If an account exists with this email, a password reset link will be sent' };
+        return requestTestPasswordReset(email);
       }
 
       const supabase = getSupabaseClient();
-      const redirectTo = `${getBaseUrl('FRONTEND_URL', 3000)}/reset-password`;
-      const { error } = await supabase.auth.resetPasswordForEmail(email, {
-        redirectTo,
-      });
+      // The recovery email must contain {{ .Token }}. The app verifies that
+      // six-digit code directly; it does not depend on a browser redirect.
+      const { error } = await supabase.auth.resetPasswordForEmail(email);
 
       if (error) {
         _error('Forgot password error:', error);
         throw new Error(error.message || 'Failed to send password reset email');
       }
 
-      return { message: 'If an account exists with this email, a password reset link will be sent' };
+      return { message: 'If an account exists with this email, a password reset code will be sent' };
     } catch (error) {
       _error('Forgot password service error:', error);
       throw error;
     }
   }
 
-  async resetPassword({ email, token, password }) {
+  async resetPassword({ email, token, token_hash, code, access_token, password }) {
     try {
       if (shouldUseTestAuth()) {
         return { message: 'Password reset successful. Please log in with your new password.' };
       }
 
       const supabase = getSupabaseClient();
-      const { data, error } = await supabase.auth.verifyOtp({
-        email,
-        token,
-        type: 'recovery',
-      });
+      let recoveryAccessToken = access_token;
 
-      if (error) {
-        warn('Password reset token verification failed:', error.message);
-        throw new Error('Invalid or expired reset token');
+      if (!recoveryAccessToken && code) {
+        const { data, error } = await supabase.auth.exchangeCodeForSession(code);
+        if (error) {
+          warn('Password reset code exchange failed:', error.message);
+          throw new Error('Invalid or expired reset link');
+        }
+        recoveryAccessToken = data.session?.access_token;
       }
 
-      if (!data.session?.access_token) {
-        throw new Error('Invalid or expired reset token');
+      if (!recoveryAccessToken && (token || token_hash)) {
+        const verificationRequest = token_hash
+          ? { token_hash, type: 'recovery' }
+          : { email, token, type: 'recovery' };
+        const { data, error } = await supabase.auth.verifyOtp(verificationRequest);
+
+        if (error) {
+          warn('Password reset token verification failed:', error.message);
+          throw new Error('Invalid or expired reset token');
+        }
+
+        recoveryAccessToken = data.session?.access_token;
       }
 
-      const recoverySupabase = getSupabaseClientForToken(data.session.access_token);
-      const { error: updateError } = await recoverySupabase.auth.updateUser({
-        password,
-      });
+      if (!recoveryAccessToken) {
+        throw new Error('Invalid or expired reset link');
+      }
+
+      const { data: recoveryUser, error: recoveryUserError } = await supabase.auth.getUser(recoveryAccessToken);
+      if (recoveryUserError || !recoveryUser.user?.id) {
+        throw new Error('Invalid or expired reset session');
+      }
+
+      const { error: updateError } = await getSupabaseAdminClient().auth.admin.updateUserById(
+        recoveryUser.user.id,
+        { password },
+      );
 
       if (updateError) {
         _error('Password update error:', updateError);
@@ -427,6 +495,68 @@ class AuthService {
       return { message: 'Password reset successful. Please log in with your new password.' };
     } catch (error) {
       _error('Reset password error:', error);
+      throw error;
+    }
+  }
+
+  async verifyPasswordResetOtp({ email, token }) {
+    if (shouldUseTestAuth()) {
+      return verifyTestPasswordResetOtp(email, token);
+    }
+
+    const supabase = getSupabaseClient();
+    const { data, error } = await supabase.auth.verifyOtp({
+      email,
+      token,
+      type: 'recovery',
+    });
+
+    if (error || !data.session?.access_token) {
+      throw new Error('Invalid or expired verification code');
+    }
+
+    return {
+      access_token: data.session.access_token,
+      refresh_token: data.session.refresh_token,
+    };
+  }
+
+  async changePassword({ current_password, new_password, accessToken, userId, email }) {
+    try {
+      if (!accessToken || !userId || !email) {
+        throw new Error('Authentication required');
+      }
+
+      if (shouldUseTestAuth()) {
+        return changeTestUserPassword(accessToken, current_password, new_password);
+      }
+
+      // Supabase's updateUser call does not verify the old password. Verify it
+      // first with a password sign-in, then update this same user by ID. The
+      // admin API is used for the second step because a raw bearer header is
+      // not a persisted Supabase session for updateUser().
+      const supabase = getSupabaseClient();
+      const { data: loginData, error: loginError } = await supabase.auth.signInWithPassword({
+        email,
+        password: current_password,
+      });
+
+      if (loginError || loginData.user?.id !== userId) {
+        throw new Error('Current password is incorrect');
+      }
+
+      const { error: updateError } = await getSupabaseAdminClient().auth.admin.updateUserById(userId, {
+        password: new_password,
+      });
+
+      if (updateError) {
+        _error('Change password update error:', updateError);
+        throw new Error(updateError.message || 'Failed to change password');
+      }
+
+      return { message: 'Password changed successfully' };
+    } catch (error) {
+      _error('Change password error:', error);
       throw error;
     }
   }

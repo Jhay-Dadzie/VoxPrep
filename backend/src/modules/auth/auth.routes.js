@@ -6,6 +6,7 @@
  * - POST   /signup
  * - POST   /login
  * - POST   /logout (protected)
+ * - POST   /change-password (protected)
  * - GET    /me (protected)
  * - POST   /forgot-password
  * - POST   /reset-password
@@ -84,9 +85,29 @@ router.get('/google/callback', asyncHandler(authController.googleCallback.bind(a
 /**
  * GET /api/v1/auth/verify-email
  * Verify email address (called from Supabase confirmation link)
- * Query: ?token=...
+ * Query: ?email=user@example.com&token=123456
  */
 router.get('/verify-email', asyncHandler(authController.verifyEmail.bind(authController)));
+
+/**
+ * POST /api/v1/auth/resend-verification
+ * Body: { email }
+ */
+router.post(
+  '/resend-verification',
+  signupLimiter,
+  asyncHandler(authController.resendVerification.bind(authController))
+);
+
+/**
+ * POST /api/v1/auth/verify-password-reset-otp
+ * Body: { email, token }
+ */
+router.post(
+  '/verify-password-reset-otp',
+  passwordLimiter,
+  asyncHandler(authController.verifyPasswordResetOtp.bind(authController))
+);
 
 /**
  * PROTECTED ENDPOINTS
@@ -98,6 +119,17 @@ router.get('/verify-email', asyncHandler(authController.verifyEmail.bind(authCon
  * Headers: Authorization: Bearer <access_token>
  */
 router.get('/me', protect, asyncHandler(authController.getCurrentUser.bind(authController)));
+
+/**
+ * POST /api/v1/auth/change-password
+ * Body: { current_password, new_password }
+ */
+router.post(
+  '/change-password',
+  protect,
+  passwordLimiter,
+  asyncHandler(authController.changePassword.bind(authController))
+);
 
 /**
  * POST /api/v1/auth/logout

@@ -4,7 +4,15 @@
  */
 
 import authService from './auth.service.js';
-import { validateInput, signupSchema, loginSchema, forgotPasswordSchema, resetPasswordSchema } from './auth.validation.js';
+import {
+  validateInput,
+  signupSchema,
+  loginSchema,
+  forgotPasswordSchema,
+  resetPasswordSchema,
+  changePasswordSchema,
+  verifyPasswordResetOtpSchema,
+} from './auth.validation.js';
 import { info, error as _error } from '../../core/errors/logger.js';
 
 const REFRESH_TOKEN_COOKIE = 'refresh_token';
@@ -175,11 +183,11 @@ class AuthController {
    */
   async verifyEmail(req, res) {
     try {
-      const { token } = req.query;
+      const { email, token } = req.query;
       if (!token) {
         return res.status(400).json({ success: false, message: 'Verification token missing' });
       }
-      const result = await authService.verifyEmail(token);
+      const result = await authService.verifyEmail(token, email);
       if (process.env.FRONTEND_URL) {
         return res.redirect(`${process.env.FRONTEND_URL}/login?verified=true`);
       }
@@ -187,6 +195,24 @@ class AuthController {
     } catch (error) {
       _error('Email verification error:', error);
       return res.status(400).json({ success: false, message: error.message });
+    }
+  }
+
+  /**
+   * POST /auth/resend-verification
+   */
+  async resendVerification(req, res) {
+    try {
+      const email = req.body?.email?.trim();
+      if (!email) {
+        return res.status(400).json({ success: false, message: 'Email is required' });
+      }
+
+      const result = await authService.resendVerification(email);
+      return res.status(200).json({ success: true, message: result.message });
+    } catch (error) {
+      _error('Resend verification error:', error);
+      return res.status(400).json({ success: false, message: error.message || 'Could not resend verification code' });
     }
   }
 
@@ -237,8 +263,15 @@ class AuthController {
         });
       }
 
-      const { email, token, password } = value;
-      const result = await authService.resetPassword({ email, token, password });
+      const { email, token, token_hash, code, access_token, password } = value;
+      const result = await authService.resetPassword({
+        email,
+        token,
+        token_hash,
+        code,
+        access_token,
+        password,
+      });
 
       info(`Password reset completed for: ${email}`);
 
@@ -252,6 +285,68 @@ class AuthController {
       return res.status(400).json({
         success: false,
         message: error.message || 'Password reset failed',
+      });
+    }
+  }
+
+  /**
+   * POST /auth/verify-password-reset-otp
+   * Verify the recovery OTP and return a short-lived recovery session for the
+   * app's new-password screen.
+   */
+  async verifyPasswordResetOtp(req, res) {
+    try {
+      const { valid, errors, value } = validateInput(req.body, verifyPasswordResetOtpSchema);
+      if (!valid) {
+        return res.status(400).json({ success: false, message: 'Validation failed', errors });
+      }
+
+      const result = await authService.verifyPasswordResetOtp(value);
+      return res.status(200).json({
+        success: true,
+        message: 'Verification code accepted',
+        data: result,
+      });
+    } catch (error) {
+      _error('Verify password reset OTP error:', error);
+      return res.status(400).json({
+        success: false,
+        message: error.message || 'Invalid or expired verification code',
+      });
+    }
+  }
+
+  /**
+   * POST /auth/change-password
+   * Change password for an authenticated user after verifying the current one.
+   */
+  async changePassword(req, res) {
+    try {
+      const { valid, errors, value } = validateInput(req.body, changePasswordSchema);
+      if (!valid) {
+        return res.status(400).json({
+          success: false,
+          message: 'Validation failed',
+          errors,
+        });
+      }
+
+      const result = await authService.changePassword({
+        ...value,
+        accessToken: req.token,
+        userId: req.user.id,
+        email: req.user.email,
+      });
+
+      return res.status(200).json({
+        success: true,
+        message: result.message,
+      });
+    } catch (error) {
+      _error('Change password controller error:', error);
+      return res.status(400).json({
+        success: false,
+        message: error.message || 'Failed to change password',
       });
     }
   }

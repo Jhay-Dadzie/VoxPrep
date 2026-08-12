@@ -92,6 +92,8 @@ const resetPasswordSchema = object({
     }),
   code: string()
     .optional(),
+  token_hash: string()
+    .optional(),
   access_token: string()
     .optional(),
   refresh_token: string()
@@ -104,13 +106,48 @@ const resetPasswordSchema = object({
       'any.required': 'New password is required',
     }),
 })
-  .or('code', 'access_token', 'token')
+  .or('code', 'access_token', 'token', 'token_hash')
   .with('token', 'email')
   .messages({
     'object.missing': 'Reset code, access token, or reset token is required',
     'object.with': 'Email is required when using a reset token',
   })
   .strict();
+
+/**
+ * Change password validation (for authenticated users)
+ */
+const changePasswordSchema = object({
+  current_password: string()
+    .required()
+    .messages({
+      'any.required': 'Current password is required',
+    }),
+  new_password: string()
+    .min(PASSWORD_MIN_LENGTH)
+    .required()
+    .messages({
+      'string.min': `New password must be at least ${PASSWORD_MIN_LENGTH} characters long`,
+      'any.required': 'New password is required',
+    }),
+}).strict();
+
+const verifyPasswordResetOtpSchema = object({
+  email: string()
+    .email()
+    .required()
+    .messages({
+      'string.email': 'Please provide a valid email address',
+      'any.required': 'Email is required',
+    }),
+  token: string()
+    .length(8)
+    .required()
+    .messages({
+      'string.length': 'Verification code must be 8 digits',
+      'any.required': 'Verification code is required',
+    }),
+}).strict();
 
 /**
  * Generic validation function
@@ -137,6 +174,8 @@ export default {
   loginSchema,
   forgotPasswordSchema,
   resetPasswordSchema,
+  changePasswordSchema,
+  verifyPasswordResetOtpSchema,
   validateInput,
 };
 
@@ -145,5 +184,7 @@ export {
   loginSchema,
   forgotPasswordSchema,
   resetPasswordSchema,
+  changePasswordSchema,
+  verifyPasswordResetOtpSchema,
   validateInput,
 };

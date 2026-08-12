@@ -8,6 +8,7 @@ const usersById = new Map();
 const sessionsByAccessToken = new Map();
 const sessionsByRefreshToken = new Map();
 const verificationTokensByValue = new Map();
+const passwordResetTokensByValue = new Map();
 
 function generateTestAvatar(email) {
   const name = encodeURIComponent(email.split('@')[0]);
@@ -145,6 +146,49 @@ export function logoutTestUser(accessToken) {
   sessionsByRefreshToken.delete(session.refresh_token);
 
   return { message: 'Logout successful' };
+}
+
+export function changeTestUserPassword(accessToken, currentPassword, newPassword) {
+  const session = sessionsByAccessToken.get(accessToken);
+
+  if (!session) {
+    throw new Error('Invalid or expired token');
+  }
+
+  const user = usersById.get(session.userId);
+  if (!user || user.password !== currentPassword) {
+    throw new Error('Current password is incorrect');
+  }
+
+  user.password = newPassword;
+  user.updated_at = new Date().toISOString();
+
+  return { message: 'Password changed successfully' };
+}
+
+export function requestTestPasswordReset(email) {
+  const user = usersByEmail.get(email.toLowerCase());
+  if (user) {
+    const token = String(Math.floor(10000000 + Math.random() * 90000000));
+    passwordResetTokensByValue.set(`${email.toLowerCase()}:${token}`, user.id);
+    // Local test mode has no mail provider. Log the code so an integration
+    // test or developer can complete the flow without exposing this in prod.
+    console.info(`Test password reset code for ${email}: ${token}`);
+  }
+  return { message: 'If an account exists with this email, a password reset code will be sent' };
+}
+
+export function verifyTestPasswordResetOtp(email, token) {
+  const key = `${email.toLowerCase()}:${token}`;
+  const userId = passwordResetTokensByValue.get(key);
+  const user = userId ? usersById.get(userId) : null;
+
+  if (!user) {
+    throw new Error('Invalid or expired verification code');
+  }
+
+  passwordResetTokensByValue.delete(key);
+  return createSession(user.id);
 }
 
 export function verifyTestEmail(token) {
