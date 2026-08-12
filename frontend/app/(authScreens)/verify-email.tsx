@@ -52,21 +52,40 @@ export default function VerifyEmail() {
           <View style={styles.row}>
             {digits.map((d, i) => (
               <TextInput
-                key={i}
-                ref={(r) => { inputs.current[i] = r }}
-                value={d}
-                onChangeText={(v) => setAt(i, v)}
-                keyboardType='number-pad'
-                maxLength={1}
-                style={[
-                  styles.cell,
-                  {
-                    borderColor: d ? colors.tint : colors.border,
-                    color: colors.oppositeColor,
-                    backgroundColor: colors.card,
-                  },
-                ]}
-              />
+              key={i}
+              ref={(r) => {
+                inputs.current[i] = r
+              }}
+              value={d}
+              onChangeText={(v) => setAt(i, v)}
+              onKeyPress={({ nativeEvent }) => {
+                if (nativeEvent.key === 'Backspace') {
+                  const next = [...digits]
+            
+                  if (digits[i]) {
+                    // Clear the current digit
+                    next[i] = ''
+                    setDigits(next)
+                  } else if (i > 0) {
+                    // Current cell is empty:
+                    // go to the previous cell and clear it
+                    next[i - 1] = ''
+                    setDigits(next)
+                    inputs.current[i - 1]?.focus()
+                  }
+                }
+              }}
+              keyboardType="number-pad"
+              maxLength={1}
+              style={[
+                styles.cell,
+                {
+                  borderColor: d ? colors.tint : colors.border,
+                  color: colors.oppositeColor,
+                  backgroundColor: colors.card,
+                },
+              ]}
+            />
             ))}
           </View>
 
@@ -74,7 +93,7 @@ export default function VerifyEmail() {
             <View style={[styles.progressFill, { width: `${(fillCount / 8) * 100}%`, backgroundColor: colors.tint }]} />
           </View>
 
-          <Button action={() => router.replace('/(tabs)/dashboard')} disabled={fillCount < 8}>
+          <Button action={() => router.replace('/mode-select')} disabled={fillCount < 8}>
             <ThemedText type='placeholderText'>Verify Account</ThemedText>
           </Button>
 
@@ -98,11 +117,28 @@ export default function VerifyEmail() {
 
 const styles = StyleSheet.create({
   card: { borderRadius: 16, padding: 22 },
-  iconBox: { width: 56, height: 56, borderRadius: 28, alignItems: 'center', justifyContent: 'center', alignSelf: 'center', marginBottom: 14 },
+  iconBox: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    alignItems: 'center',
+    justifyContent: 'center',
+    alignSelf: 'center',
+    marginBottom: 14
+  },
   title: { textAlign: 'center' },
   sub: { marginTop: 8, marginBottom: 20, fontSize: 13, textAlign: 'center', lineHeight: 19 },
   row: { flexDirection: 'row', justifyContent: 'space-between', gap: 8, marginBottom: 14 },
-  cell: { flex: 1, aspectRatio: 1, borderRadius: 12, borderWidth: 1, textAlign: 'center', fontSize: 24, fontWeight: '700' },
+  cell: {
+    flex: 1,
+    aspectRatio: 1,
+    borderRadius: 12,
+    borderWidth: 1,
+    textAlign: 'center',
+    fontSize: 12, 
+    fontWeight: '700',
+    paddingBottom: 9
+  },
   progressBar: { height: 3, borderRadius: 2, marginBottom: 18, overflow: 'hidden' },
   progressFill: { height: '100%' },
   didnt: { textAlign: 'center', marginTop: 14, fontSize: 13 },

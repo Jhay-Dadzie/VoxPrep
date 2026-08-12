@@ -1,5 +1,5 @@
 import { Tabs } from "expo-router";
-import { LayoutDashboard, Mic, SquareKanban, User } from "lucide-react-native"
+import { LayoutDashboard, Mic, SquareKanban, User, TrendingUp } from "lucide-react-native"
 import { Colors } from "@/constants/theme";
 import { useColorScheme } from '@/hooks/use-color-scheme'
 import { View, Text, Pressable } from "react-native";
