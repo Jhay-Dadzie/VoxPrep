@@ -1,4 +1,4 @@
-import React from 'react'
+import React, { useState } from 'react'
 import { StyleSheet, View, ScrollView, Pressable } from 'react-native'
 import { LinearGradient } from 'expo-linear-gradient'
 import { Ionicons } from '@expo/vector-icons'
@@ -55,6 +55,7 @@ const QUESTIONS: Question[] = [
 export default function Results() {
   const colorScheme = useColorScheme()
   const colors = Colors[colorScheme ?? 'light']
+  const [hasResults, setHasResults] = useState(false)
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.card }} edges={['top']}>
@@ -64,87 +65,120 @@ export default function Results() {
 
       <ScrollView
         style={{ backgroundColor: colors.background }}
-        contentContainerStyle={{ padding: 20, paddingBottom: 32 }}
+        contentContainerStyle={{ padding: 20, paddingBottom: 32, flexGrow: 1 }}
         showsVerticalScrollIndicator={false}
       >
-        <ThemedText style={[styles.heroTitle, { color: colors.tint }]}>
-          Interview Session{'\n'}Complete!
-        </ThemedText>
-        <ThemedText style={[styles.heroSub, { color: colors.subtext }]}>
-          You&apos;ve successfully finished your mock interview with our AI recruiter.
-        </ThemedText>
-
-        <View style={[styles.scoreCard, { backgroundColor: colors.card }]}>
-          <ThemedText style={[styles.scoreTag, { color: colors.subtext }]}>OVERALL PERFORMANCE</ThemedText>
-          <View style={[styles.ring, { borderColor: colors.tint }]}>
-            <ThemedText style={[styles.ringNum, { color: colors.tint }]}>72%</ThemedText>
-          </View>
-          <View style={[styles.goodPill, { backgroundColor: colors.successBg }]}>
-            <ThemedText style={[styles.goodPillText, { color: colors.success }]}>Good Job!</ThemedText>
-          </View>
-        </View>
-
-        <View style={[styles.metricsCard, { backgroundColor: colors.card }]}>
-          <ThemedText style={[styles.metricsTitle, { color: colors.oppositeColor }]}>Performance Metrics</ThemedText>
-
-          <Metric label="Clarity" value="8/10" pct={0.8} color={colors.tint} track={colors.border} sub={colors.subtext} text={colors.oppositeColor} />
-          <Metric label="Quality" value="7/10" pct={0.7} color="#7A4CF0" track={colors.border} sub={colors.subtext} text={colors.oppositeColor} />
-          <Metric label="Confidence" value="8.5/10" pct={0.85} color={colors.success} track={colors.border} sub={colors.subtext} text={colors.oppositeColor} />
-
-          <View style={styles.actionsRow}>
-            <Pressable style={[styles.btnPrimary, { backgroundColor: colors.tint }]} onPress={() => router.replace('/(tabs)/dashboard')}>
-              <ThemedText style={styles.btnPrimaryText}>Save Results</ThemedText>
-            </Pressable>
-            <Pressable
-              style={[styles.btnOutline, { borderColor: colors.tint }]}
-              onPress={() => router.replace('/interview-session')}
-            >
-              <ThemedText style={[styles.btnOutlineText, { color: colors.tint }]}>Retake Session</ThemedText>
-            </Pressable>
-          </View>
-        </View>
-
-        <View style={styles.sectionHead}>
-          <ThemedText style={[styles.sectionTitle, { color: colors.oppositeColor }]}>
-            Question-by-Question{'\n'}Analysis
-          </ThemedText>
-          <View style={styles.historyLink}>
-            <ThemedText style={[styles.historyText, { color: colors.tint }]}>View{'\n'}History</ThemedText>
-            <Ionicons name="time-outline" size={16} color={colors.tint} />
-          </View>
-        </View>
-
-        {QUESTIONS.map((q) => (
-          <QuestionCard key={q.n} q={q} colors={colors} />
-        ))}
-
-        <LinearGradient
-          colors={[colors.tint, '#7A4CF0']}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-          style={styles.unlockCard}
-        >
-          <View style={styles.unlockIconWrap}>
-            <Ionicons name="trending-up" size={22} color="#fff" />
-          </View>
-          <View style={{ flex: 1 }}>
-            <ThemedText style={styles.unlockTitle}>Unlock Deep Analytics</ThemedText>
-            <ThemedText style={styles.unlockSub}>
-              Get sentiment analysis and keyword optimization tips for your next interview.
+        {!hasResults ? (
+          <View style={styles.emptyContainer}>
+            <View style={[styles.emptyIcon, { backgroundColor: colors.brandSoft }]}>
+              <Ionicons name="stats-chart" size={32} color={colors.tint} />
+            </View>
+            <ThemedText style={[styles.emptyTitle, { color: colors.oppositeColor }]}>
+              No interviews yet
             </ThemedText>
-            <Pressable style={[styles.goPro, { backgroundColor: colors.card }]}>
-              <ThemedText style={[styles.goProText, { color: colors.tint }]}>Go Pro Now</ThemedText>
+            <ThemedText style={[styles.emptyBody, { color: colors.subtext }]}>
+              Complete an interview session to see your detailed results, performance metrics, and AI-powered insights here.
+            </ThemedText>
+            <Pressable
+              style={[styles.startBtn, { backgroundColor: colors.tint }]}
+              onPress={() => router.push('/(tabs)/practice')}
+            >
+              <ThemedText style={styles.startBtnText}>Start Your First Interview</ThemedText>
+              <Ionicons name="play" size={16} color="#fff" />
             </Pressable>
+
+            <View style={[styles.tipCard, { backgroundColor: colors.brandSoft, borderColor: colors.border }]}>
+              <View style={styles.tipHeader}>
+                <Ionicons name="bulb" size={16} color={colors.warning} />
+                <ThemedText style={[styles.tipTitle, { color: colors.oppositeColor }]}>Getting Started</ThemedText>
+              </View>
+              <ThemedText style={[styles.tipBody, { color: colors.subtext }]}>
+                Start with a practice interview to get real-time feedback on your answers, speech clarity, confidence, and more.
+              </ThemedText>
+            </View>
           </View>
-        </LinearGradient>
+        ) : (
+          <>
+            <ThemedText style={[styles.heroTitle, { color: colors.tint }]}>
+              Interview Session{'\n'}Complete!
+            </ThemedText>
+            <ThemedText style={[styles.heroSub, { color: colors.subtext }]}>
+              You&apos;ve successfully finished your mock interview with our AI recruiter.
+            </ThemedText>
+
+            <View style={[styles.scoreCard, { backgroundColor: colors.card }]}>
+              <ThemedText style={[styles.scoreTag, { color: colors.subtext }]}>OVERALL PERFORMANCE</ThemedText>
+              <View style={[styles.ring, { borderColor: colors.tint }]}>
+                <ThemedText style={[styles.ringNum, { color: colors.tint }]}>72%</ThemedText>
+              </View>
+              <View style={[styles.goodPill, { backgroundColor: colors.successBg }]}>
+                <ThemedText style={[styles.goodPillText, { color: colors.success }]}>Good Job!</ThemedText>
+              </View>
+            </View>
+
+            <View style={[styles.metricsCard, { backgroundColor: colors.card }]}>
+              <ThemedText style={[styles.metricsTitle, { color: colors.oppositeColor }]}>Performance Metrics</ThemedText>
+
+              <Metric label="Clarity" value="8/10" pct={0.8} color={colors.tint} track={colors.border} text={colors.oppositeColor} />
+              <Metric label="Quality" value="7/10" pct={0.7} color="#7A4CF0" track={colors.border} text={colors.oppositeColor} />
+              <Metric label="Confidence" value="8.5/10" pct={0.85} color={colors.success} track={colors.border} text={colors.oppositeColor} />
+
+              <View style={styles.actionsRow}>
+                <Pressable style={[styles.btnPrimary, { backgroundColor: colors.tint }]} onPress={() => router.replace('/(tabs)/dashboard')}>
+                  <ThemedText style={styles.btnPrimaryText}>Save Results</ThemedText>
+                </Pressable>
+                <Pressable
+                  style={[styles.btnOutline, { borderColor: colors.tint }]}
+                  onPress={() => router.replace('/interview-session')}
+                >
+                  <ThemedText style={[styles.btnOutlineText, { color: colors.tint }]}>Retake Session</ThemedText>
+                </Pressable>
+              </View>
+            </View>
+
+            <View style={styles.sectionHead}>
+              <ThemedText style={[styles.sectionTitle, { color: colors.oppositeColor }]}>
+                Question-by-Question{'\n'}Analysis
+              </ThemedText>
+              <View style={styles.historyLink}>
+                <ThemedText style={[styles.historyText, { color: colors.tint }]}>View{'\n'}History</ThemedText>
+                <Ionicons name="time-outline" size={16} color={colors.tint} />
+              </View>
+            </View>
+
+            {QUESTIONS.map((q) => (
+              <QuestionCard key={q.n} q={q} colors={colors} />
+            ))}
+
+            <LinearGradient
+              colors={[colors.tint, '#7A4CF0']}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={styles.unlockCard}
+            >
+              <View style={styles.unlockIconWrap}>
+                <Ionicons name="trending-up" size={22} color="#fff" />
+              </View>
+              <View style={{ flex: 1 }}>
+                <ThemedText style={styles.unlockTitle}>Unlock Deep Analytics</ThemedText>
+                <ThemedText style={styles.unlockSub}>
+                  Get sentiment analysis and keyword optimization tips for your next interview.
+                </ThemedText>
+                <Pressable style={[styles.goPro, { backgroundColor: colors.card }]}>
+                  <ThemedText style={[styles.goProText, { color: colors.tint }]}>Go Pro Now</ThemedText>
+                </Pressable>
+              </View>
+            </LinearGradient>
+          </>
+        )}
       </ScrollView>
     </SafeAreaView>
   )
 }
 
 function Metric({
-  label, value, pct, color, track, sub, text,
-}: { label: string; value: string; pct: number; color: string; track: string; sub: string; text: string }) {
+  label, value, pct, color, track, text,
+}: { label: string; value: string; pct: number; color: string; track: string; text: string }) {
   return (
     <View style={styles.metricRow}>
       <View style={styles.metricLabels}>
@@ -199,6 +233,17 @@ const RING = 150
 const styles = StyleSheet.create({
   header: { paddingHorizontal: 20, paddingVertical: 14, borderBottomWidth: 1 },
   headerTitle: { fontSize: 16, fontWeight: '700' },
+
+  emptyContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 24, paddingVertical: 40 },
+  emptyIcon: { width: 64, height: 64, borderRadius: 32, alignItems: 'center', justifyContent: 'center', marginBottom: 20 },
+  emptyTitle: { fontWeight: '700', fontSize: 20, marginBottom: 10, textAlign: 'center' },
+  emptyBody: { fontSize: 14, lineHeight: 21, textAlign: 'center', marginBottom: 24 },
+  startBtn: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 24, paddingVertical: 14, borderRadius: 999, marginBottom: 20, alignSelf: 'center' },
+  startBtnText: { color: '#fff', fontWeight: '700' },
+  tipCard: { borderRadius: 12, padding: 16, borderWidth: 1, width: '100%' },
+  tipHeader: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 6 },
+  tipTitle: { fontWeight: '700' },
+  tipBody: { fontSize: 13, lineHeight: 19 },
 
   heroTitle: { fontSize: 26, fontWeight: '800', textAlign: 'center', marginTop: 6, marginBottom: 10 },
   heroSub: { fontSize: 14, textAlign: 'center', lineHeight: 20, marginBottom: 22, paddingHorizontal: 24 },

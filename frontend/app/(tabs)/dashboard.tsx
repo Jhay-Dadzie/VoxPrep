@@ -13,27 +13,21 @@ const AVATAR = 'https://i.pravatar.cc/100?img=12'
 export default function Dashboard() {
   const colorScheme = useColorScheme()
   const colors = Colors[colorScheme ?? 'light']
-  const [empty, setEmpty] = useState(false)
+  const [hasHistory, setHasHistory] = useState(false)
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.card }} edges={['top']}>
       <View style={[styles.header, { backgroundColor: colors.card, borderBottomColor: colors.border }]}>
-        {empty ? (
-          <Pressable onPress={() => setEmpty(false)} hitSlop={10} style={styles.backBtn}>
-            <Ionicons name="chevron-back" size={22} color={colors.tint} />
-          </Pressable>
-        ) : (
-          <Image source={{ uri: AVATAR }} style={styles.avatar} />
-        )}
+        <Image source={{ uri: AVATAR }} style={styles.avatar} />
         <ThemedText style={[styles.brand, { color: colors.tint }]}>VoxPrep</ThemedText>
         <View style={{ flex: 1 }} />
-        <Pressable onPress={() => setEmpty(!empty)} hitSlop={10}>
+        <Pressable hitSlop={10}>
           <Ionicons name="notifications-outline" size={22} color={colors.oppositeColor} />
         </Pressable>
       </View>
 
       <ScrollView style={{ backgroundColor: colors.background }} contentContainerStyle={{ padding: 20, paddingBottom: 32 }} showsVerticalScrollIndicator={false}>
-        {!empty && (
+        {hasHistory && (
           <>
             <ThemedText style={[styles.welcomeTag, { color: colors.muted }]}>WELCOME BACK,</ThemedText>
             <ThemedText style={[styles.welcomeName, { color: colors.oppositeColor }]}>Alex Reynolds</ThemedText>
@@ -43,9 +37,9 @@ export default function Dashboard() {
         <LinearGradient
           colors={[colors.tint, '#7A4CF0']}
           start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}
-          style={[styles.hero, empty && { padding: 22 }]}
+          style={[styles.hero, !hasHistory && { padding: 22 }]}
         >
-          {empty ? (
+          {!hasHistory ? (
             <>
               <ThemedText style={styles.heroTitleLg}>Welcome to VoxPrep!</ThemedText>
               <ThemedText style={styles.heroSubLg}>Ready to land your dream job? Start practicing with AI-driven, realistic interview scenarios.</ThemedText>
@@ -57,7 +51,7 @@ export default function Dashboard() {
           ) : (
             <>
               <ThemedText style={styles.heroTitle}>Ready for your next interview?</ThemedText>
-              <Pressable style={[styles.heroBtn, { backgroundColor: colors.card }]} onPress={() => setEmpty(true)}>
+              <Pressable style={[styles.heroBtn, { backgroundColor: colors.card }]} onPress={() => router.push('/(tabs)/practice')}>
                 <ThemedText style={[styles.heroBtnText, { color: colors.tint }]}>Start Practice Session</ThemedText>
                 <Ionicons name="play-circle" size={18} color={colors.tint} />
               </Pressable>
@@ -65,7 +59,7 @@ export default function Dashboard() {
           )}
         </LinearGradient>
 
-        {empty ? (
+        {!hasHistory ? (
           <>
             <View style={[styles.emptyCard, { backgroundColor: colors.card }]}>
               <View style={[styles.emptyIcon, { backgroundColor: colors.brandSoft }]}>
