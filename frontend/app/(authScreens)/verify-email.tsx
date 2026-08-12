@@ -1,6 +1,6 @@
 import { StyleSheet, ScrollView, View, TextInput, Pressable } from 'react-native'
 import React, { useEffect, useRef, useState } from 'react'
-import { router } from 'expo-router'
+import { router, useLocalSearchParams } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import { ThemedText } from '@/components/themed-text'
 import { ThemedView } from '@/components/themed-view'
@@ -8,12 +8,19 @@ import { useColorScheme } from '@/hooks/use-color-scheme'
 import { Colors } from '@/constants/theme'
 import { GlobalStyles } from '@/components/styles/globalStyles'
 import Button from '@/components/button'
+import { authService } from '@/services/auth'
+import { AuthError } from '@/services/error-handler'
 
 export default function VerifyEmail() {
   const colorScheme = useColorScheme()
   const colors = Colors[colorScheme ?? 'light']
-  const [digits, setDigits] = useState(['', '', '', '', '', '', '',''])
+  const { email: emailParam } = useLocalSearchParams<{ email?: string }>()
+  const email = typeof emailParam === 'string' ? emailParam : ''
+  const [digits, setDigits] = useState(['', '', '', '', '', '', '', ''])
   const [seconds, setSeconds] = useState(120)
+  const [error, setError] = useState<string | null>(null)
+  const [isVerifying, setIsVerifying] = useState(false)
+  const [isResending, setIsResending] = useState(false)
   const inputs = useRef<(TextInput | null)[]>([])
 
   useEffect(() => {
@@ -33,6 +40,30 @@ export default function VerifyEmail() {
   const mm = String(Math.floor(seconds / 60)).padStart(2, '0')
   const ss = String(seconds % 60).padStart(2, '0')
 
+  const handleVerify = async () => {
+    const code = digits.join('')
+    if (code.length !== 8) return
+    if (!email) {
+      setError('Your signup email is missing. Please create the account again.')
+      return
+    }
+
+    setIsVerifying(true)
+    setError(null)
+    try {
+      await authService.verifyEmail(email, code)
+      router.replace({ pathname: '/(authScreens)/signin', params: { email } })
+    } catch (err) {
+      if (err instanceof AuthError) {
+        setError(err.message)
+      } else {
+        setError('Verification failed. Please try again.')
+      }
+    } finally {
+      setIsVerifying(false)
+    }
+  }
+
   return (
     <ThemedView style={[GlobalStyles.container, { flex: 1 }]}>
       <ScrollView
@@ -46,8 +77,14 @@ export default function VerifyEmail() {
           </View>
           <ThemedText type='title' style={[styles.title, { color: colors.oppositeColor }]}>Verify Your Email</ThemedText>
           <ThemedText style={[styles.sub, { color: colors.subtext }]}>
-            We've sent a 6-digit verification code to your inbox. Please enter it below to secure your account.
+            We&apos;ve sent a 8-digit verification code to your inbox. Please enter it below to secure your account.
           </ThemedText>
+
+          {error && (
+            <View style={[styles.errorBox, { backgroundColor: colors.dangerBg }]}>
+              <ThemedText style={{ color: colors.danger, fontSize: 13 }}>{error}</ThemedText>
+            </View>
+          )}
 
           <View style={styles.row}>
             {digits.map((d, i) => (
@@ -61,14 +98,11 @@ export default function VerifyEmail() {
               onKeyPress={({ nativeEvent }) => {
                 if (nativeEvent.key === 'Backspace') {
                   const next = [...digits]
-            
+
                   if (digits[i]) {
-                    // Clear the current digit
                     next[i] = ''
                     setDigits(next)
                   } else if (i > 0) {
-                    // Current cell is empty:
-                    // go to the previous cell and clear it
                     next[i - 1] = ''
                     setDigits(next)
                     inputs.current[i - 1]?.focus()
@@ -93,20 +127,34 @@ export default function VerifyEmail() {
             <View style={[styles.progressFill, { width: `${(fillCount / 8) * 100}%`, backgroundColor: colors.tint }]} />
           </View>
 
-          <Button action={() => router.replace('/mode-select')} disabled={fillCount < 8}>
-            <ThemedText type='placeholderText'>Verify Account</ThemedText>
+          <Button action={handleVerify} disabled={fillCount < 8 || isVerifying}>
+            <ThemedText type='placeholderText'>{isVerifying ? 'Verifying...' : 'Verify Account'}</ThemedText>
           </Button>
 
-          <ThemedText style={[styles.didnt, { color: colors.subtext }]}>Didn't receive the email?</ThemedText>
+          <ThemedText style={[styles.didnt, { color: colors.subtext }]}>Didn&apos;t receive the email?</ThemedText>
           <View style={styles.timerRow}>
             <Ionicons name='time-outline' size={14} color={colors.muted} />
             <ThemedText style={{ color: colors.subtext, fontSize: 13 }}>
               Resend code in <ThemedText style={{ color: colors.tint, fontWeight: '600' }}>{mm}:{ss}</ThemedText>
             </ThemedText>
           </View>
-          <Pressable disabled={seconds > 0} onPress={() => setSeconds(120)}>
+          <Pressable
+            disabled={seconds > 0 || isResending || !email}
+            onPress={async () => {
+              setIsResending(true)
+              setError(null)
+              try {
+                await authService.resendVerification(email)
+                setSeconds(120)
+              } catch (err) {
+                setError(err instanceof AuthError ? err.message : 'Could not resend the code.')
+              } finally {
+                setIsResending(false)
+              }
+            }}
+          >
             <ThemedText style={{ textAlign: 'center', marginTop: 8, fontWeight: '600', color: seconds > 0 ? colors.muted : colors.tint }}>
-              Resend Code
+              {isResending ? 'Sending...' : 'Resend Code'}
             </ThemedText>
           </Pressable>
         </View>
@@ -128,6 +176,7 @@ const styles = StyleSheet.create({
   },
   title: { textAlign: 'center' },
   sub: { marginTop: 8, marginBottom: 20, fontSize: 13, textAlign: 'center', lineHeight: 19 },
+  errorBox: { padding: 12, borderRadius: 8, marginBottom: 16 },
   row: { flexDirection: 'row', justifyContent: 'space-between', gap: 8, marginBottom: 14 },
   cell: {
     flex: 1,

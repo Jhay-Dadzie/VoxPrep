@@ -9,15 +9,23 @@ import { Colors } from '@/constants/theme'
 import { GlobalStyles } from '@/components/styles/globalStyles'
 import Button from '@/components/button'
 import Input from '@/components/input'
+import { useAuth } from '@/hooks/auth-context'
+import { getFieldError } from '@/services/error-handler'
 
 export default function Signin() {
   const colorScheme = useColorScheme()
   const colors = Colors[colorScheme ?? 'light']
+  const { login, isLoading, error, clearError } = useAuth()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
 
-  const handleLogin = () => {
-    router.replace('/(tabs)/dashboard')
+  const handleLogin = async () => {
+    try {
+      clearError()
+      await login(email, password)
+    } catch (err) {
+      console.error('Login failed:', err)
+    }
   }
 
   return (
@@ -37,6 +45,12 @@ export default function Signin() {
             Please enter your details to continue your journey.
           </ThemedText>
 
+          {error && (
+            <View style={[styles.errorBox, { backgroundColor: colors.dangerBg }]}>
+              <ThemedText style={{ color: colors.danger, fontSize: 13 }}>{error.message}</ThemedText>
+            </View>
+          )}
+
           <Input
             label='Email address'
             icon='mail-outline'
@@ -45,6 +59,7 @@ export default function Signin() {
             onChangeText={setEmail}
             keyboardType='email-address'
             autoCapitalize='none'
+            error={getFieldError(error as any, 'email')}
           />
           <Input
             label='Password'
@@ -53,14 +68,15 @@ export default function Signin() {
             value={password}
             onChangeText={setPassword}
             password
+            error={getFieldError(error as any, 'password')}
           />
 
           <Pressable onPress={() => router.push('/(authScreens)/forgotPassword')} style={{ alignSelf: 'flex-end', marginBottom: 16 }}>
             <ThemedText style={{ color: colors.tint, fontWeight: '600', fontSize: 13 }}>Forgot password?</ThemedText>
           </Pressable>
 
-          <Button action={handleLogin}>
-            <ThemedText type='placeholderText'>Login</ThemedText>
+          <Button action={handleLogin} disabled={isLoading}>
+            <ThemedText type='placeholderText'>{isLoading ? 'Signing in...' : 'Login'}</ThemedText>
           </Button>
 
           <View style={styles.divider}>
@@ -91,6 +107,7 @@ export default function Signin() {
 
 const styles = StyleSheet.create({
   card: { borderRadius: 16, padding: 22 },
+  errorBox: { padding: 12, borderRadius: 8, marginBottom: 16 },
   divider: { flexDirection: 'row', alignItems: 'center', marginVertical: 18 },
   line: { flex: 1, height: 1 },
   dividerText: { fontSize: 11, marginHorizontal: 8, letterSpacing: 1 },
