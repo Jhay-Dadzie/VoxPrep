@@ -34,8 +34,27 @@ const PORT = process.env.PORT
 app.use(helmet());
 
 // CORS - Enable cross-origin requests
+// Allow all localhost variations and common mobile simulator IPs
 app.use(cors({
-  origin: process.env.CORS_ORIGIN?.split(',') || ['http://localhost:5050'],
+  origin: process.env.CORS_ORIGIN?.split(',') || [
+    // Web/Desktop
+    'http://localhost:3000',
+    'http://localhost:5050',
+    'http://localhost:8081',  // Expo web dev server
+    'http://localhost:3005',  // Another common Expo port
+    'http://127.0.0.1:3000',
+    'http://127.0.0.1:5050',
+    'http://127.0.0.1:8081',
+    'http://127.0.0.1:3005',
+    // Mobile simulators
+    'http://192.168.1.1:8081',    // Common home network IP
+    'http://10.0.0.1:8081',       // Virtual machine networks
+    'http://10.0.2.2:8081',       // Android emulator localhost proxy
+    'http://172.20.10.14:8081',   // Docker/WSL networks
+    'http://172.20.10.14:5050'
+    // Add your local IP here (replace XXX.XXX.XXX.XXX with your IP)
+    // 'http://YOUR_LOCAL_IP:8081',
+  ],
   credentials: true,
   optionsSuccessStatus: 200,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
