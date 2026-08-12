@@ -7,6 +7,9 @@ import { ThemedText } from '@/components/themed-text'
 import { useColorScheme } from '@/hooks/use-color-scheme'
 import { useMode } from '@/hooks/mode-context'
 import { useInterviewer } from '@/hooks/interviewer-context'
+import { useAuth } from '@/hooks/auth-context'
+import { userService } from '@/services/user'
+import { AuthError } from '@/services/error-handler'
 import { Colors } from '@/constants/theme'
 import {
   INTERVIEWER_LIST,
@@ -30,7 +33,10 @@ export default function SelectInterviewer() {
   const colors = Colors[colorScheme ?? 'light']
   const { copy } = useMode()
   const { interviewerId, setInterviewer, isLoaded } = useInterviewer()
+  const { updateUser } = useAuth()
   const [selected, setSelected] = useState<InterviewerId>(interviewerId)
+  const [isContinuing, setIsContinuing] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
   // The stored choice is read back from AsyncStorage after first render, so the
   // initial state above can be the default rather than the user's real choice.
@@ -38,9 +44,21 @@ export default function SelectInterviewer() {
     if (isLoaded) setSelected(interviewerId)
   }, [isLoaded, interviewerId])
 
-  const handleContinue = () => {
+  const handleContinue = async () => {
+    if (isContinuing) return
+
+    setIsContinuing(true)
+    setError(null)
     setInterviewer(selected)
-    router.replace('/(tabs)/dashboard')
+    try {
+      const completedUser = await userService.completeProfile()
+      await updateUser(completedUser)
+      router.replace('/(tabs)/dashboard')
+    } catch (err) {
+      setError(err instanceof AuthError ? err.message : 'Could not finish setup. Please try again.')
+    } finally {
+      setIsContinuing(false)
+    }
   }
 
   return (
@@ -139,12 +157,15 @@ export default function SelectInterviewer() {
 
         <View style={{ flex: 1, minHeight: 24 }} />
 
+        {error && <ThemedText style={{ color: colors.danger, marginBottom: 12 }}>{error}</ThemedText>}
+
         <Pressable
-          style={[styles.cta, { backgroundColor: colors.tint }]}
+          style={[styles.cta, { backgroundColor: colors.tint, opacity: isContinuing ? 0.6 : 1 }]}
           onPress={handleContinue}
+          disabled={isContinuing}
           accessibilityRole="button"
         >
-          <ThemedText style={styles.ctaText}>Continue</ThemedText>
+          <ThemedText style={styles.ctaText}>{isContinuing ? 'Saving...' : 'Continue'}</ThemedText>
           <Ionicons name="arrow-forward" size={16} color="#fff" />
         </Pressable>
       </ScrollView>

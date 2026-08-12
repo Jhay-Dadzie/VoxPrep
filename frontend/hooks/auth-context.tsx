@@ -1,0 +1,136 @@
+import React, { createContext, useContext, useEffect, useMemo, useState } from 'react'
+import { getStoredUser, updateStoredUser, StoredUser } from '@/lib/token-storage'
+import { authService, SignupResult } from '@/services/auth'
+import { AuthError } from '@/services/error-handler'
+
+export type AuthContextType = {
+  user: StoredUser | null
+  isSignedIn: boolean
+  isLoading: boolean
+  error: AuthError | null
+  signup: (email: string, password: string, fullName?: string) => Promise<SignupResult>
+  login: (email: string, password: string) => Promise<void>
+  logout: () => Promise<void>
+  clearError: () => void
+  updateUser: (updatedUser: Partial<StoredUser>) => Promise<void>
+}
+
+const AuthContext = createContext<AuthContextType | null>(null)
+
+export function AuthProvider({ children }: { children: React.ReactNode }) {
+  const [user, setUser] = useState<StoredUser | null>(null)
+  const [isLoading, setIsLoading] = useState(true)
+  const [error, setError] = useState<AuthError | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+
+    const restoreUser = async () => {
+      try {
+        const storedUser = await getStoredUser()
+        if (!cancelled) {
+          setUser(storedUser)
+        }
+      } catch (err) {
+        console.error('Failed to restore user:', err)
+      } finally {
+        if (!cancelled) {
+          setIsLoading(false)
+        }
+      }
+    }
+
+    restoreUser()
+
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  const handleSignup = async (email: string, password: string, fullName?: string): Promise<SignupResult> => {
+    setIsLoading(true)
+    setError(null)
+    try {
+      const newUser = await authService.signup({
+        email,
+        password,
+        full_name: fullName,
+      })
+      if (!newUser.requiresVerification && newUser.user) {
+        setUser(newUser.user)
+      }
+      return newUser
+    } catch (err) {
+      const authError = err instanceof AuthError ? err : new AuthError(String(err))
+      setError(authError)
+      throw authError
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  const handleLogin = async (email: string, password: string) => {
+    setIsLoading(true)
+    setError(null)
+    try {
+      const loggedInUser = await authService.login({
+        email,
+        password,
+      })
+      setUser(loggedInUser)
+    } catch (err) {
+      const authError = err instanceof AuthError ? err : new AuthError(String(err))
+      setError(authError)
+      throw authError
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  const handleLogout = async () => {
+    setIsLoading(true)
+    try {
+      await authService.logout()
+      setUser(null)
+      setError(null)
+    } catch (err) {
+      console.error('Logout error:', err)
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  const handleUpdateUser = async (updatedUser: Partial<StoredUser>) => {
+    if (user) {
+      const newUser = { ...user, ...updatedUser }
+      setUser(newUser)
+      // Also persist to AsyncStorage
+      await updateStoredUser(newUser)
+    }
+  }
+
+  const value = useMemo<AuthContextType>(
+    () => ({
+      user,
+      isSignedIn: !!user,
+      isLoading,
+      error,
+      signup: handleSignup,
+      login: handleLogin,
+      logout: handleLogout,
+      clearError: () => setError(null),
+      updateUser: handleUpdateUser,
+    }),
+    [user, isLoading, error]
+  )
+
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
+}
+
+export function useAuth(): AuthContextType {
+  const context = useContext(AuthContext)
+  if (!context) {
+    throw new Error('useAuth must be used inside AuthProvider')
+  }
+  return context
+}

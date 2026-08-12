@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { StyleSheet, View, ScrollView, Image, Pressable, Switch } from 'react-native'
+import { StyleSheet, View, ScrollView, Image, Pressable, Switch, Alert } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import { router } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
@@ -7,6 +7,7 @@ import { ThemedText } from '@/components/themed-text'
 import { useColorScheme } from '@/hooks/use-color-scheme'
 import { useThemeOverride } from '@/hooks/theme-context'
 import { Colors } from '@/constants/theme'
+import { useAuth } from '@/hooks/auth-context'
 
 const AVATAR = 'https://i.pravatar.cc/200?img=12'
 
@@ -14,7 +15,31 @@ export default function Profile() {
   const colorScheme = useColorScheme()
   const colors = Colors[colorScheme ?? 'light']
   const { setOverride } = useThemeOverride()
+  const { user, logout, isLoading } = useAuth()
   const dark = colorScheme === 'dark'
+
+  const handleLogout = async () => {
+    Alert.alert(
+      'Confirm Logout',
+      'Are you sure you want to logout?',
+      [
+        { text: 'Cancel', onPress: () => {}, style: 'cancel' },
+        {
+          text: 'Logout',
+          onPress: async () => {
+            try {
+              await logout()
+              // Router will automatically redirect to signin due to auth state change
+            } catch (err) {
+              console.error('Logout error:', err)
+              Alert.alert('Error', 'Failed to logout. Please try again.')
+            }
+          },
+          style: 'destructive',
+        },
+      ]
+    )
+  }
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.card }} edges={['top']}>
@@ -41,8 +66,12 @@ export default function Profile() {
               <Ionicons name="pencil" size={11} color="#fff" />
             </View>
           </View>
-          <ThemedText style={[styles.name, { color: colors.oppositeColor }]}>Alex Johnson</ThemedText>
-          <ThemedText style={[styles.email, { color: colors.subtext }]}>alex.johnson@corporate.ai</ThemedText>
+          <ThemedText style={[styles.name, { color: colors.oppositeColor }]}>
+            {user?.full_name || 'Profile'}
+          </ThemedText>
+          <ThemedText style={[styles.email, { color: colors.subtext }]}>
+            {user?.email || 'Not signed in'}
+          </ThemedText>
         </View>
 
         <SectionTitle text="Account Settings" color={colors.oppositeColor} />
@@ -107,9 +136,11 @@ export default function Profile() {
           <Row icon="chatbubble-ellipses-outline" label="Feedback" colors={colors} onPress={() => {}} />
         </View>
 
-        <Pressable style={styles.logout} onPress={() => router.replace('/(authScreens)/signin')}>
+        <Pressable style={styles.logout} onPress={handleLogout} disabled={isLoading}>
           <Ionicons name="log-out-outline" size={18} color={colors.danger} />
-          <ThemedText style={[styles.logoutText, { color: colors.danger }]}>Logout</ThemedText>
+          <ThemedText style={[styles.logoutText, { color: colors.danger }]}>
+            {isLoading ? 'Logging out...' : 'Logout'}
+          </ThemedText>
         </Pressable>
       </ScrollView>
     </SafeAreaView>
