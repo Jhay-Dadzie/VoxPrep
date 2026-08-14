@@ -1,5 +1,5 @@
-import { StyleSheet, View, ScrollView, Image, Pressable } from 'react-native'
-import React, { useState } from 'react'
+import { StyleSheet, View, ScrollView, Image, Pressable, ActivityIndicator } from 'react-native'
+import React from 'react'
 import { LinearGradient } from 'expo-linear-gradient'
 import { Ionicons } from '@expo/vector-icons'
 import { router } from 'expo-router'
@@ -7,13 +7,22 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import { ThemedText } from '@/components/themed-text'
 import { useColorScheme } from '@/hooks/use-color-scheme'
 import { Colors } from '@/constants/theme'
+import { useAuth } from '@/hooks/auth-context'
+import { useRecentSessions } from '@/hooks/use-history'
+import { HistorySummary } from '@/types/history'
+import { formatDuration, formatRelative, formatScore, scoreBand } from '@/lib/format'
 
 const AVATAR = 'https://i.pravatar.cc/100?img=12'
+
+/** Recent sessions shown inline; the rest live behind "View All". */
+const DASHBOARD_SESSION_COUNT = 7
 
 export default function Dashboard() {
   const colorScheme = useColorScheme()
   const colors = Colors[colorScheme ?? 'light']
-  const [hasHistory, setHasHistory] = useState(false)
+  const { user } = useAuth()
+  const { sessions, total, averageScore, isLoading, error, refresh, hasHistory } =
+    useRecentSessions(DASHBOARD_SESSION_COUNT)
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.card }} edges={['top']}>
@@ -30,7 +39,9 @@ export default function Dashboard() {
         {hasHistory && (
           <>
             <ThemedText style={[styles.welcomeTag, { color: colors.muted }]}>WELCOME BACK,</ThemedText>
-            <ThemedText style={[styles.welcomeName, { color: colors.oppositeColor }]}>Alex Reynolds</ThemedText>
+            <ThemedText style={[styles.welcomeName, { color: colors.oppositeColor }]}>
+              {user?.full_name || 'there'}
+            </ThemedText>
           </>
         )}
 
@@ -59,7 +70,21 @@ export default function Dashboard() {
           )}
         </LinearGradient>
 
-        {!hasHistory ? (
+        {error && (
+          <View style={[styles.errorCard, { backgroundColor: colors.dangerBg }]}>
+            <Ionicons name="alert-circle" size={16} color={colors.danger} />
+            <ThemedText style={{ color: colors.danger, fontSize: 13, flex: 1 }}>{error}</ThemedText>
+            <Pressable onPress={refresh} hitSlop={8}>
+              <ThemedText style={{ color: colors.danger, fontWeight: '700', fontSize: 13 }}>
+                Retry
+              </ThemedText>
+            </Pressable>
+          </View>
+        )}
+
+        {isLoading ? (
+          <ActivityIndicator style={{ marginTop: 32 }} color={colors.tint} />
+        ) : !hasHistory ? (
           <>
             <View style={[styles.emptyCard, { backgroundColor: colors.card }]}>
               <View style={[styles.emptyIcon, { backgroundColor: colors.brandSoft }]}>
@@ -84,8 +109,13 @@ export default function Dashboard() {
         ) : (
           <>
             <View style={styles.statsRow}>
-              <StatCard icon="time-outline" value="24" label="Sessions Completed" colors={colors} />
-              <StatCard icon="stats-chart" value="82%" label="Avg Score" colors={colors} />
+              <StatCard icon="time-outline" value={`${total}`} label="Sessions Reviewed" colors={colors} />
+              <StatCard
+                icon="stats-chart"
+                value={formatScore(averageScore)}
+                label="Avg Score"
+                colors={colors}
+              />
             </View>
 
             <View style={[styles.nextCard, { backgroundColor: colors.card }]}>
@@ -101,12 +131,21 @@ export default function Dashboard() {
 
             <View style={styles.sectionHead}>
               <ThemedText style={[styles.sectionTitle, { color: colors.oppositeColor }]}>Recent Sessions</ThemedText>
-              <ThemedText style={{ color: colors.tint, fontWeight: '600', fontSize: 13 }}>View All</ThemedText>
+              <Pressable onPress={() => router.push('/history')} hitSlop={8}>
+                <ThemedText style={{ color: colors.tint, fontWeight: '600', fontSize: 13 }}>View All</ThemedText>
+              </Pressable>
             </View>
 
-            <SessionRow icon="code-slash" title="Software Engineer" meta="2 days ago • 15 mins" score={92} tone="success" colors={colors} />
-            <SessionRow icon="bar-chart" title="Product Manager" meta="5 days ago • 22 mins" score={74} tone="warning" colors={colors} />
-            <SessionRow icon="person" title="Behavioral Prep" meta="1 week ago • 10 mins" score={48} tone="danger" colors={colors} />
+            {sessions.map((session) => (
+              <SessionRow
+                key={session.id}
+                session={session}
+                colors={colors}
+                onPress={() =>
+                  router.push({ pathname: '/history/[id]', params: { id: session.id } })
+                }
+              />
+            ))}
 
             <View style={[styles.insights, { backgroundColor: '#0B1220' }]}>
               <ThemedText style={styles.insightsTag}>AI INSIGHTS</ThemedText>
@@ -132,22 +171,68 @@ function StatCard({ icon, value, label, colors }: any) {
   )
 }
 
-function SessionRow({ icon, title, meta, score, tone, colors }: any) {
-  const bg = tone === 'success' ? colors.successBg : tone === 'warning' ? colors.warningBg : colors.dangerBg
-  const fg = tone === 'success' ? colors.success : tone === 'warning' ? colors.warning : colors.danger
+function SessionRow({
+  session,
+  colors,
+  onPress,
+}: {
+  session: HistorySummary
+  colors: any
+  onPress: () => void
+}) {
+  const score = session.overall_score
+  const band = scoreBand(score)
+  const bg =
+    band.tone === 'success'
+      ? colors.successBg
+      : band.tone === 'warning'
+        ? colors.warningBg
+        : band.tone === 'danger'
+          ? colors.dangerBg
+          : colors.inputBg
+  const fg =
+    band.tone === 'success'
+      ? colors.success
+      : band.tone === 'warning'
+        ? colors.warning
+        : band.tone === 'danger'
+          ? colors.danger
+          : colors.subtext
+
+  const title = session.session_title || session.job_title || 'Untitled session'
+  const meta = [formatRelative(session.started_at), formatDuration(session.duration_seconds)]
+    .filter((part) => part !== '--')
+    .join(' • ')
+
   return (
-    <View style={[styles.sessionRow, { backgroundColor: colors.card }]}>
+    <Pressable
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.sessionRow,
+        { backgroundColor: colors.card, opacity: pressed ? 0.85 : 1 },
+      ]}
+    >
       <View style={[styles.sessionIcon, { backgroundColor: colors.brandSoft }]}>
-        <Ionicons name={icon} size={18} color={colors.subtext} />
+        <Ionicons
+          name={session.status === 'paused' ? 'pause' : 'mic'}
+          size={18}
+          color={colors.subtext}
+        />
       </View>
       <View style={{ flex: 1 }}>
-        <ThemedText style={{ color: colors.oppositeColor, fontWeight: '600' }}>{title}</ThemedText>
-        <ThemedText style={{ color: colors.subtext, fontSize: 12, marginTop: 2 }}>{meta}</ThemedText>
+        <ThemedText style={{ color: colors.oppositeColor, fontWeight: '600' }} numberOfLines={1}>
+          {title}
+        </ThemedText>
+        <ThemedText style={{ color: colors.subtext, fontSize: 12, marginTop: 2 }} numberOfLines={1}>
+          {meta || 'No timing recorded'}
+        </ThemedText>
       </View>
       <View style={[styles.scorePill, { backgroundColor: bg }]}>
-        <ThemedText style={{ color: fg, fontWeight: '700', fontSize: 13 }}>{score}%</ThemedText>
+        <ThemedText style={{ color: fg, fontWeight: '700', fontSize: 13 }}>
+          {formatScore(score)}
+        </ThemedText>
       </View>
-    </View>
+    </Pressable>
   )
 }
 
@@ -185,6 +270,14 @@ const styles = StyleSheet.create({
   insightsBody: { color: '#fff', fontSize: 14, lineHeight: 20 },
   insightsSparkle: { position: 'absolute', right: 12, bottom: 12 },
 
+  errorCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 16,
+  },
   emptyCard: { borderRadius: 12, padding: 32, alignItems: 'center', marginBottom: 16 },
   emptyIcon: { width: 52, height: 52, borderRadius: 26, alignItems: 'center', justifyContent: 'center', marginBottom: 14 },
   emptyTitle: { fontWeight: '700', fontSize: 17, marginBottom: 8 },

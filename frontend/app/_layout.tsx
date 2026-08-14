@@ -24,7 +24,8 @@ function RootLayoutInner() {
       segments[0] === '(authScreens)' ||
       segments[0] === 'mode-select' ||
       segments[0] === 'select-interviewer' ||
-      segments[0] === 'settings'
+      segments[0] === 'settings' ||
+      segments[0] === 'history'
     ) return
 
     if (!isSignedIn) {
@@ -53,6 +54,7 @@ function RootLayoutInner() {
         <Stack.Screen name="questions-ready" options={{ presentation: 'transparentModal', animation: 'fade' }} />
         <Stack.Screen name="interview-session" options={{ animation: 'fade' }} />
         <Stack.Screen name="settings" />
+        <Stack.Screen name="history" />
       </Stack>
       <StatusBar style={colorScheme === 'dark' ? 'light' : 'dark'} />
     </NavThemeProvider>

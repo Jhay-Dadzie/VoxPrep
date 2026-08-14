@@ -61,6 +61,10 @@ export default function Results() {
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.card }} edges={['top']}>
       <View style={[styles.header, { backgroundColor: colors.card, borderBottomColor: colors.border }]}>
         <ThemedText style={[styles.headerTitle, { color: colors.tint }]}>Results</ThemedText>
+        <Pressable style={styles.headerHistoryBtn} onPress={() => router.push('/history')} hitSlop={8}>
+          <Ionicons name="time-outline" size={16} color={colors.tint} />
+          <ThemedText style={[styles.headerHistoryText, { color: colors.tint }]}>History</ThemedText>
+        </Pressable>
       </View>
 
       <ScrollView
@@ -140,10 +144,10 @@ export default function Results() {
               <ThemedText style={[styles.sectionTitle, { color: colors.oppositeColor }]}>
                 Question-by-Question{'\n'}Analysis
               </ThemedText>
-              <View style={styles.historyLink}>
+              <Pressable style={styles.historyLink} onPress={() => router.push('/history')} hitSlop={8}>
                 <ThemedText style={[styles.historyText, { color: colors.tint }]}>View{'\n'}History</ThemedText>
                 <Ionicons name="time-outline" size={16} color={colors.tint} />
-              </View>
+              </Pressable>
             </View>
 
             {QUESTIONS.map((q) => (
@@ -231,8 +235,17 @@ function QuestionCard({ q, colors }: { q: Question; colors: any }) {
 const RING = 150
 
 const styles = StyleSheet.create({
-  header: { paddingHorizontal: 20, paddingVertical: 14, borderBottomWidth: 1 },
+  header: {
+    paddingHorizontal: 20,
+    paddingVertical: 14,
+    borderBottomWidth: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
   headerTitle: { fontSize: 16, fontWeight: '700' },
+  headerHistoryBtn: { flexDirection: 'row', alignItems: 'center', gap: 5 },
+  headerHistoryText: { fontSize: 13, fontWeight: '600' },
 
   emptyContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 24, paddingVertical: 40 },
   emptyIcon: { width: 64, height: 64, borderRadius: 32, alignItems: 'center', justifyContent: 'center', marginBottom: 20 },
