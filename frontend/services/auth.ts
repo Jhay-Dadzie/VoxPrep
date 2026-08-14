@@ -1,3 +1,5 @@
+import * as WebBrowser from 'expo-web-browser'
+import * as Linking from 'expo-linking'
 import apiClient from '@/lib/api-client'
 import { setTokens, clearTokens, StoredUser } from '@/lib/token-storage'
 import {
@@ -10,6 +12,8 @@ import {
   PasswordResetOtpResponse,
 } from '@/types/api'
 import { parseApiError } from './error-handler'
+
+WebBrowser.maybeCompleteAuthSession()
 
 type AuthData = NonNullable<AuthResponse['data']>
 
@@ -42,7 +46,13 @@ export const authService = {
   async signup(data: SignupRequest): Promise<SignupResult> {
     try {
       console.log('Signup request:', { email: data.email })
-      const response = await apiClient.post<AuthResponse>('/auth/signup', data)
+      const fullName = data.full_name?.trim()
+      const payload: SignupRequest = {
+        email: data.email.trim(),
+        password: data.password,
+        ...(fullName ? { full_name: fullName } : {}),
+      }
+      const response = await apiClient.post<AuthResponse>('/auth/signup', payload)
 
       if (response.data.data) {
         const authData = response.data.data
@@ -149,6 +159,50 @@ export const authService = {
     try {
       await apiClient.post('/auth/resend-verification', { email })
     } catch (error) {
+      throw parseApiError(error)
+    }
+  },
+
+  async googleSignIn(): Promise<StoredUser> {
+    try {
+      // Return from Google directly to the app instead of the backend's
+      // localhost callback URL.
+      const redirectUrl = Linking.createURL('oauth-callback')
+      const response = await apiClient.get<any>('/auth/google', {
+        params: { redirectUri: redirectUrl },
+      })
+      const oauthUrl = response.data.data?.url ?? response.data.url
+
+      if (!oauthUrl) {
+        throw new Error('No OAuth URL returned from server')
+      }
+
+      const result = await WebBrowser.openAuthSessionAsync(oauthUrl, redirectUrl)
+
+      if (result.type === 'dismiss') {
+        throw new Error('Google signin was cancelled')
+      }
+
+      if (result.type === 'success' && result.url) {
+        const parsedUrl = new URL(result.url)
+        const code = parsedUrl.searchParams.get('code')
+
+        if (!code) {
+          throw new Error('No authorization code in callback')
+        }
+
+        const callbackResponse = await apiClient.get<AuthResponse>('/auth/google/callback', {
+          params: { code }
+        })
+
+        if (callbackResponse.data.data) {
+          return await storeAuthData(callbackResponse.data.data, 'login')
+        }
+      }
+
+      throw new Error('Google signin failed')
+    } catch (error) {
+      console.error('Google signin error:', error)
       throw parseApiError(error)
     }
   },

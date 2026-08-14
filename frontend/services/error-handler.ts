@@ -35,7 +35,7 @@ export const parseApiError = (error: unknown): AuthError => {
     })
 
     if (data?.message) {
-      return new AuthError(data.message, data.field, data.details)
+      return new AuthError(data.message, data.field, data.details ?? data.errors)
     }
 
     if (error.response?.status === 401) {

@@ -108,9 +108,38 @@ export interface VerifyEmailResponse {
   message: string
 }
 
+export interface GoogleAuthResponse {
+  success: boolean
+  data?: {
+    url: string
+  }
+}
+
+export interface GoogleCallbackResponse {
+  success: boolean
+  data?: {
+    user?: {
+      id: string
+      email: string
+      full_name: string | null
+      is_active: boolean
+      profile_completed: boolean
+      created_at: string
+      updated_at: string
+    } | null
+    session?: {
+      access_token: string
+      refresh_token: string
+    } | null
+    access_token?: string
+    refresh_token?: string
+  }
+}
+
 export interface ApiError {
   success: false
   message: string
   field?: string
   details?: Record<string, string>
+  errors?: Record<string, string>
 }
