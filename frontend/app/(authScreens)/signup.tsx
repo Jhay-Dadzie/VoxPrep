@@ -1,6 +1,6 @@
 import { StyleSheet, ScrollView, Pressable, View } from 'react-native'
-import React, { useEffect, useState } from 'react'
-import { Link, router } from 'expo-router'
+import React, { useCallback, useEffect, useState } from 'react'
+import { Link, router, useFocusEffect } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import { ThemedText } from '@/components/themed-text'
 import { ThemedView } from '@/components/themed-view'
@@ -27,6 +27,15 @@ export default function Signup() {
       router.replace(user.profile_completed ? '/(tabs)/dashboard' : '/mode-select')
     }
   }, [isInitializing, isLoading, user])
+
+  // The auth error lives in the provider above the navigator, so it outlives
+  // this screen. Drop it on the way out, otherwise a failed signup still
+  // shows up under the inputs of whichever auth screen is opened next.
+  useFocusEffect(
+    useCallback(() => {
+      return () => clearError()
+    }, [clearError])
+  )
 
   const pwError = pw.length > 0 && pw.length < 8 ? 'Password must be at least 8 characters.' : getFieldError(error as any, 'password')
   const confirmPwError = pw !== cpw && cpw.length > 0 ? 'Passwords do not match.' : undefined

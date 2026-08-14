@@ -1,6 +1,6 @@
 import { StyleSheet, ScrollView, Pressable, View } from 'react-native'
-import React, { useEffect, useState } from 'react'
-import { router, Link } from 'expo-router'
+import React, { useCallback, useEffect, useState } from 'react'
+import { router, Link, useFocusEffect } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import { ThemedText } from '@/components/themed-text'
 import { ThemedView } from '@/components/themed-view'
@@ -24,6 +24,15 @@ export default function Signin() {
       router.replace(user.profile_completed ? '/(tabs)/dashboard' : '/mode-select')
     }
   }, [isInitializing, isLoading, user])
+
+  // The auth error lives in the provider above the navigator, so it outlives
+  // this screen. Drop it on the way out, otherwise a failed sign-in still
+  // shows up under the inputs of whichever auth screen is opened next.
+  useFocusEffect(
+    useCallback(() => {
+      return () => clearError()
+    }, [clearError])
+  )
 
   const handleLogin = async () => {
     try {

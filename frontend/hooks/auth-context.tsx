@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useMemo, useState } from 'react'
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
 import { getStoredUser, updateStoredUser, StoredUser } from '@/lib/token-storage'
 import { authService, SignupResult } from '@/services/auth'
 import { AuthError, toAuthError } from '@/services/error-handler'
@@ -118,6 +118,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }
 
+  // Kept stable so screens can safely use it as an effect dependency: an
+  // identity that changed with `error` would make a clear-on-blur effect
+  // re-run every time the error itself changed.
+  const clearError = useCallback(() => setError(null), [])
+
   const handleUpdateUser = async (updatedUser: Partial<StoredUser>) => {
     if (user) {
       const newUser = { ...user, ...updatedUser }
@@ -138,10 +143,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       login: handleLogin,
       googleSignIn: handleGoogleSignIn,
       logout: handleLogout,
-      clearError: () => setError(null),
+      clearError,
       updateUser: handleUpdateUser,
     }),
-    [user, isLoading, isInitializing, error]
+    [user, isLoading, isInitializing, error, clearError]
   )
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>

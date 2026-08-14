@@ -1,8 +1,49 @@
 import axios, { AxiosInstance, AxiosError } from 'axios'
+import Constants from 'expo-constants'
 import { getAccessToken, getRefreshToken } from './token-storage'
 
-// Debug: Log the API URL
-const API_BASE_URL = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:5050/api/v1'
+const DEFAULT_API_PORT = '5050'
+const DEFAULT_API_PATH = '/api/v1'
+
+const configuredUrl = process.env.EXPO_PUBLIC_API_URL
+
+/**
+ * In development the machine's LAN IP changes whenever DHCP hands out a new
+ * lease (reboot, reconnect, different network), which silently breaks a
+ * hard-coded EXPO_PUBLIC_API_URL and surfaces as an axios ERR_NETWORK.
+ *
+ * The Expo dev server host is always correct - the device is connected to it
+ * right now - so derive the API host from it and reuse the port/path from
+ * EXPO_PUBLIC_API_URL. Tunnel hosts (exp.direct) are skipped, since the
+ * backend is not reachable through them.
+ */
+const resolveDevBaseUrl = (): string | null => {
+  const hostUri = Constants.expoConfig?.hostUri
+  const host = hostUri?.split(':')[0]
+  if (!host || !/^\d{1,3}(\.\d{1,3}){3}$/.test(host)) {
+    return null
+  }
+
+  let port = DEFAULT_API_PORT
+  let path = DEFAULT_API_PATH
+  if (configuredUrl) {
+    try {
+      const parsed = new URL(configuredUrl)
+      port = parsed.port || port
+      path = parsed.pathname.replace(/\/$/, '') || path
+    } catch {
+      // Malformed override - fall back to the defaults above.
+    }
+  }
+
+  return `http://${host}:${port}${path}`
+}
+
+const API_BASE_URL =
+  (__DEV__ ? resolveDevBaseUrl() : null) ??
+  configuredUrl ??
+  `http://localhost:${DEFAULT_API_PORT}${DEFAULT_API_PATH}`
+
 console.log('API Base URL:', API_BASE_URL)
 
 const apiClient: AxiosInstance = axios.create({
