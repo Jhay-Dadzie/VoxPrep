@@ -22,13 +22,12 @@
  *    in history.mapper.js.
  *
  * NOTE ON feedback COLUMNS:
- *  The exact column names for the feedback module weren't shared at the
- *  time this was written. The nested select below assumes:
- *    relevance_score, completeness_score, technical_accuracy_score,
- *    clarity_score, confidence_score, overall_score, summary, created_at
- *  If the real feedback schema differs, this is the only place to update —
- *  adjust the `feedback (...)` block in getHistorySessionById and
- *  the corresponding fields in history.mapper.js#mapFeedback.
+ *  These match the `feedback` table in supabase_schema.sql:
+ *    relevance_score, clarity_score, confidence_score, completeness_score,
+ *    overall_response_score (all 0-100), strengths, improvements,
+ *    suggestions, follow_up_tip, generated_at.
+ *  There is no technical_accuracy column. If the schema changes, update the
+ *  select in getHistorySessionById and history.mapper.js#mapFeedback together.
  *
  * NOTE ON HARD DELETE:
  *  deleteHistorySession removes only the interview_sessions row, the same
@@ -190,6 +189,8 @@ export const getHistorySessionById = async (sessionId, userId) => {
         confidence_score,
         completeness_score,
         overall_response_score,
+        strengths,
+        improvements,
         suggestions,
         follow_up_tip,
         generated_at
@@ -312,9 +313,69 @@ export const deleteHistorySession = async (sessionId, userId) => {
   return true;
 };
 
+// ─────────────────────────────────────────────────────────────────
+// Stats
+// ─────────────────────────────────────────────────────────────────
+
+/** PostgREST caps a single response; page through to cover every session. */
+const STATS_PAGE_SIZE = 1000;
+const STATS_MAX_PAGES = 100;
+
+/**
+ * Aggregate scores across *all* of the user's reviewable sessions.
+ *
+ * Only the overall_score column is selected, so this stays cheap even for a
+ * user with a long history. Sessions with no score yet are counted in
+ * total_sessions but excluded from the average.
+ *
+ * @param {string} userId
+ */
+export const getHistoryStats = async (userId) => {
+  const supabase = getSupabase();
+
+  const scores = [];
+  let total = 0;
+
+  for (let page = 0; page < STATS_MAX_PAGES; page += 1) {
+    const from = page * STATS_PAGE_SIZE;
+
+    const { data, error, count } = await supabase
+      .from('interview_sessions')
+      .select('overall_score', { count: 'exact' })
+      .eq('user_id', userId)
+      .in('status', HISTORY_STATUSES)
+      .range(from, from + STATS_PAGE_SIZE - 1);
+
+    if (error) throw new Error(error.message);
+
+    const rows = data || [];
+    if (count != null) total = count;
+
+    for (const row of rows) {
+      const score = Number(row.overall_score);
+      if (row.overall_score !== null && row.overall_score !== undefined && !Number.isNaN(score)) {
+        scores.push(score);
+      }
+    }
+
+    if (rows.length < STATS_PAGE_SIZE) break;
+  }
+
+  const average =
+    scores.length > 0 ? scores.reduce((sum, score) => sum + score, 0) / scores.length : null;
+
+  return {
+    total_sessions: total,
+    scored_sessions: scores.length,
+    // Rounded to the 2dp the score columns themselves use.
+    average_score: average === null ? null : Math.round(average * 100) / 100,
+  };
+};
+
 export default {
   getHistorySessions,
   getHistorySessionById,
+  getHistoryStats,
   setArchiveStatus,
   updateNotes,
   deleteHistorySession,

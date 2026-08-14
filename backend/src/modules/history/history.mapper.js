@@ -28,6 +28,10 @@ function firstOrSelf(value) {
 
 // ─── Feedback ─────────────────────────────────────────────────────────────────
 
+/**
+ * Column names here follow the `feedback` table in supabase_schema.sql.
+ * All scores are stored 0-100.
+ */
 function mapFeedback(rawFeedback) {
   const row = firstOrSelf(rawFeedback);
   if (!row) return null;
@@ -37,13 +41,15 @@ function mapFeedback(rawFeedback) {
     scores: {
       relevance: row.relevance_score ?? null,
       completeness: row.completeness_score ?? null,
-      technical_accuracy: row.technical_accuracy_score ?? null,
       clarity: row.clarity_score ?? null,
       confidence: row.confidence_score ?? null,
     },
-    overall_score: row.overall_score ?? null,
-    summary: row.summary ?? row.feedback_text ?? null,
-    generated_at: toISO(row.created_at),
+    overall_score: row.overall_response_score ?? null,
+    strengths: row.strengths ?? null,
+    improvements: row.improvements ?? null,
+    suggestions: row.suggestions ?? null,
+    follow_up_tip: row.follow_up_tip ?? null,
+    generated_at: toISO(row.generated_at),
   };
 }
 
@@ -60,7 +66,9 @@ function mapResponse(rawResponse) {
     response_duration_seconds: row.response_duration_seconds,
     transcription_confidence: row.transcription_confidence,
     responded_at: toISO(row.response_created_at),
-    feedback: mapFeedback(row.response_feedback),
+    // history.service.js attaches the row from the `feedback` table under
+    // `feedback`; reading any other key here silently drops all AI feedback.
+    feedback: mapFeedback(row.feedback),
   };
 }
 
@@ -141,6 +149,18 @@ function toHistoryDetail(session) {
 }
 
 /**
+ * GET /history/stats response shape.
+ */
+function toHistoryStats(stats) {
+  if (!stats) return null;
+  return {
+    total_sessions: stats.total_sessions ?? 0,
+    scored_sessions: stats.scored_sessions ?? 0,
+    average_score: stats.average_score ?? null,
+  };
+}
+
+/**
  * PATCH /history/:id/archive response shape.
  */
 function toArchiveView(row) {
@@ -166,6 +186,7 @@ export {
   toHistorySummary,
   toHistoryListResponse,
   toHistoryDetail,
+  toHistoryStats,
   toArchiveView,
   toNotesView,
 };
@@ -174,6 +195,7 @@ export default {
   toHistorySummary,
   toHistoryListResponse,
   toHistoryDetail,
+  toHistoryStats,
   toArchiveView,
   toNotesView,
 };

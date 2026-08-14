@@ -21,6 +21,7 @@ import { AppError } from '../../core/errors/appError.js';
 import {
   toHistoryListResponse,
   toHistoryDetail,
+  toHistoryStats,
   toArchiveView,
   toNotesView,
 } from './history.mapper.js';
@@ -37,6 +38,17 @@ export const getHistory = asyncHandler(async (req, res, next) => {
   res.status(200).json({
     status: 'success',
     ...toHistoryListResponse(result.data, result.pagination),
+  });
+});
+
+// ─── GET /history/stats ─────────────────────────────────────────────────────
+
+export const getHistoryStats = asyncHandler(async (req, res) => {
+  const stats = await service.getHistoryStats(req.user.id);
+
+  res.status(200).json({
+    status: 'success',
+    data: toHistoryStats(stats),
   });
 });
 
@@ -116,6 +128,7 @@ export const deleteHistorySession = asyncHandler(async (req, res, next) => {
 
 export default {
   getHistory,
+  getHistoryStats,
   getHistoryById,
   archiveSession,
   updateNotes,
