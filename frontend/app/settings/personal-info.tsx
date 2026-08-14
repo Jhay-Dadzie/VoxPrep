@@ -8,7 +8,7 @@ import { useColorScheme } from '@/hooks/use-color-scheme'
 import { Colors } from '@/constants/theme'
 import { useAuth } from '@/hooks/auth-context'
 import { userService } from '@/services/user'
-import { AuthError } from '@/services/error-handler'
+import { toAuthError } from '@/services/error-handler'
 
 const AVATAR = 'https://i.pravatar.cc/200?img=12'
 
@@ -57,11 +57,7 @@ export default function PersonalInfo() {
         { text: 'OK', onPress: () => router.back() },
       ])
     } catch (err) {
-      if (err instanceof AuthError) {
-        setError(err.message)
-      } else {
-        setError('Failed to update profile. Please try again.')
-      }
+      setError(toAuthError(err).message)
     } finally {
       setIsSaving(false)
     }

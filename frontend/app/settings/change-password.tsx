@@ -7,7 +7,7 @@ import { ThemedText } from '@/components/themed-text'
 import { useColorScheme } from '@/hooks/use-color-scheme'
 import { Colors } from '@/constants/theme'
 import { authService } from '@/services/auth'
-import { AuthError } from '@/services/error-handler'
+import { toAuthError } from '@/services/error-handler'
 
 export default function ChangePassword() {
   const colorScheme = useColorScheme()
@@ -36,11 +36,7 @@ export default function ChangePassword() {
         { text: 'OK', onPress: () => router.back() },
       ])
     } catch (err) {
-      if (err instanceof AuthError) {
-        setError(err.message)
-      } else {
-        setError('Failed to change password. Please try again.')
-      }
+      setError(toAuthError(err).message)
     } finally {
       setIsSaving(false)
     }

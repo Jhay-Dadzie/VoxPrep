@@ -9,7 +9,7 @@ import { Colors } from '@/constants/theme'
 import { GlobalStyles } from '@/components/styles/globalStyles'
 import Button from '@/components/button'
 import { authService } from '@/services/auth'
-import { AuthError } from '@/services/error-handler'
+import { toAuthError } from '@/services/error-handler'
 
 export default function VerifyEmail() {
   const colorScheme = useColorScheme()
@@ -54,11 +54,7 @@ export default function VerifyEmail() {
       await authService.verifyEmail(email, code)
       router.replace({ pathname: '/(authScreens)/signin', params: { email } })
     } catch (err) {
-      if (err instanceof AuthError) {
-        setError(err.message)
-      } else {
-        setError('Verification failed. Please try again.')
-      }
+      setError(toAuthError(err).message)
     } finally {
       setIsVerifying(false)
     }
@@ -147,7 +143,7 @@ export default function VerifyEmail() {
                 await authService.resendVerification(email)
                 setSeconds(120)
               } catch (err) {
-                setError(err instanceof AuthError ? err.message : 'Could not resend the code.')
+                setError(toAuthError(err).message)
               } finally {
                 setIsResending(false)
               }

@@ -11,12 +11,12 @@ import { AuthProvider, useAuth } from "@/hooks/auth-context"
 
 function RootLayoutInner() {
   const colorScheme = useColorScheme()
-  const { isSignedIn, isLoading, user } = useAuth()
+  const { isSignedIn, isInitializing, user } = useAuth()
   const router = useRouter()
   const segments = useSegments()
 
   useEffect(() => {
-    if (isLoading) return
+    if (isInitializing) return
 
     // Auth screens and the two setup screens manage their own navigation.
     // Do not redirect them while the user is completing setup.
@@ -35,9 +35,9 @@ function RootLayoutInner() {
       // If logged in and profile complete, redirect to dashboard
       router.replace('/(tabs)/dashboard')
     }
-  }, [isSignedIn, isLoading, router, user?.profile_completed, segments])
+  }, [isSignedIn, isInitializing, router, user?.profile_completed, segments])
 
-  if (isLoading) {
+  if (isInitializing) {
     return null
   }
 

@@ -1,5 +1,5 @@
 import { StyleSheet, ScrollView, Pressable, View } from 'react-native'
-import React, { useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import { router, Link } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import { ThemedText } from '@/components/themed-text'
@@ -15,9 +15,15 @@ import { getFieldError } from '@/services/error-handler'
 export default function Signin() {
   const colorScheme = useColorScheme()
   const colors = Colors[colorScheme ?? 'light']
-  const { login, googleSignIn, isLoading, error, clearError } = useAuth()
+  const { login, googleSignIn, isLoading, isInitializing, user, error, clearError } = useAuth()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+
+  useEffect(() => {
+    if (!isInitializing && !isLoading && user) {
+      router.replace(user.profile_completed ? '/(tabs)/dashboard' : '/mode-select')
+    }
+  }, [isInitializing, isLoading, user])
 
   const handleLogin = async () => {
     try {
@@ -54,7 +60,7 @@ export default function Signin() {
             Please enter your details to continue your journey.
           </ThemedText>
 
-          {error && (
+          {error && !error.field && !error.details && (
             <View style={[styles.errorBox, { backgroundColor: colors.dangerBg }]}>
               <ThemedText style={{ color: colors.danger, fontSize: 13 }}>{error.message}</ThemedText>
             </View>

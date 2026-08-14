@@ -1,12 +1,13 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from 'react'
 import { getStoredUser, updateStoredUser, StoredUser } from '@/lib/token-storage'
 import { authService, SignupResult } from '@/services/auth'
-import { AuthError } from '@/services/error-handler'
+import { AuthError, toAuthError } from '@/services/error-handler'
 
 export type AuthContextType = {
   user: StoredUser | null
   isSignedIn: boolean
   isLoading: boolean
+  isInitializing: boolean
   error: AuthError | null
   signup: (email: string, password: string, fullName?: string) => Promise<SignupResult>
   login: (email: string, password: string) => Promise<void>
@@ -20,7 +21,8 @@ const AuthContext = createContext<AuthContextType | null>(null)
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<StoredUser | null>(null)
-  const [isLoading, setIsLoading] = useState(true)
+  const [isLoading, setIsLoading] = useState(false)
+  const [isInitializing, setIsInitializing] = useState(true)
   const [error, setError] = useState<AuthError | null>(null)
 
   useEffect(() => {
@@ -36,7 +38,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         console.error('Failed to restore user:', err)
       } finally {
         if (!cancelled) {
-          setIsLoading(false)
+          setIsInitializing(false)
         }
       }
     }
@@ -62,7 +64,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
       return newUser
     } catch (err) {
-      const authError = err instanceof AuthError ? err : new AuthError(String(err))
+      const authError = toAuthError(err)
       setError(authError)
       throw authError
     } finally {
@@ -80,7 +82,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       })
       setUser(loggedInUser)
     } catch (err) {
-      const authError = err instanceof AuthError ? err : new AuthError(String(err))
+      const authError = toAuthError(err)
       setError(authError)
       throw authError
     } finally {
@@ -95,7 +97,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const loggedInUser = await authService.googleSignIn()
       setUser(loggedInUser)
     } catch (err) {
-      const authError = err instanceof AuthError ? err : new AuthError(String(err))
+      const authError = toAuthError(err)
       setError(authError)
       throw authError
     } finally {
@@ -130,6 +132,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       user,
       isSignedIn: !!user,
       isLoading,
+      isInitializing,
       error,
       signup: handleSignup,
       login: handleLogin,
@@ -138,7 +141,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       clearError: () => setError(null),
       updateUser: handleUpdateUser,
     }),
-    [user, isLoading, error]
+    [user, isLoading, isInitializing, error]
   )
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>

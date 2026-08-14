@@ -11,7 +11,7 @@ import { GlobalStyles } from '@/components/styles/globalStyles'
 import Button from '@/components/button'
 import Input from '@/components/input'
 import { authService } from '@/services/auth'
-import { AuthError } from '@/services/error-handler'
+import { toAuthError } from '@/services/error-handler'
 
 export default function ResetPassword() {
   const colorScheme = useColorScheme()
@@ -65,11 +65,7 @@ export default function ResetPassword() {
         [{ text: 'OK', onPress: () => router.replace('/(authScreens)/signin') }]
       )
     } catch (err) {
-      if (err instanceof AuthError) {
-        setError(err.message)
-      } else {
-        setError('Failed to reset password. Please try again.')
-      }
+      setError(toAuthError(err).message)
     } finally {
       setIsLoading(false)
     }

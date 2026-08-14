@@ -8,7 +8,7 @@ import { Colors } from '@/constants/theme'
 import { GlobalStyles } from '@/components/styles/globalStyles'
 import Button from '@/components/button'
 import { authService } from '@/services/auth'
-import { AuthError } from '@/services/error-handler'
+import { toAuthError } from '@/services/error-handler'
 
 export default function ResetPasswordOtp() {
   const colorScheme = useColorScheme()
@@ -44,7 +44,7 @@ export default function ResetPasswordOtp() {
         params: { email, access_token: session.access_token },
       })
     } catch (err) {
-      setError(err instanceof AuthError ? err.message : 'Invalid or expired verification code.')
+      setError(toAuthError(err).message)
     } finally {
       setIsVerifying(false)
     }

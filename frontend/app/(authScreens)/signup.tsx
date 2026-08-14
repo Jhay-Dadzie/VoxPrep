@@ -1,5 +1,5 @@
 import { StyleSheet, ScrollView, Pressable, View } from 'react-native'
-import React, { useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import { Link, router } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import { ThemedText } from '@/components/themed-text'
@@ -15,12 +15,18 @@ import { getFieldError } from '@/services/error-handler'
 export default function Signup() {
   const colorScheme = useColorScheme()
   const colors = Colors[colorScheme ?? 'light']
-  const { signup, googleSignIn, isLoading, error, clearError } = useAuth()
+  const { signup, googleSignIn, isLoading, isInitializing, user, error, clearError } = useAuth()
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
   const [pw, setPw] = useState('')
   const [cpw, setCpw] = useState('')
   const [agree, setAgree] = useState(false)
+
+  useEffect(() => {
+    if (!isInitializing && !isLoading && user) {
+      router.replace(user.profile_completed ? '/(tabs)/dashboard' : '/mode-select')
+    }
+  }, [isInitializing, isLoading, user])
 
   const pwError = pw.length > 0 && pw.length < 8 ? 'Password must be at least 8 characters.' : getFieldError(error as any, 'password')
   const confirmPwError = pw !== cpw && cpw.length > 0 ? 'Passwords do not match.' : undefined
@@ -68,7 +74,7 @@ export default function Signup() {
             Join thousands of professionals mastering their interview skills.
           </ThemedText>
 
-          {error && !error.field && (
+          {error && !error.field && !error.details && (
             <View style={[styles.errorBox, { backgroundColor: colors.dangerBg }]}>
               <ThemedText style={{ color: colors.danger, fontSize: 13 }}>{error.message}</ThemedText>
             </View>
