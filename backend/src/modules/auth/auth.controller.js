@@ -88,10 +88,21 @@ class AuthController {
     } catch (error) {
       _error('Signup controller error:', error);
 
+      // Errors raised with an explicit status carry a message written for the
+      // user, so pass both through untouched.
+      if (error.statusCode) {
+        return res.status(error.statusCode).json({
+          success: false,
+          message: error.message,
+          field: error.statusCode === 409 ? 'email' : undefined,
+        });
+      }
+
       if (error.message.includes('already registered')) {
         return res.status(409).json({
           success: false,
-          message: 'Email already registered',
+          message: 'An account with this email already exists. Please sign in instead.',
+          field: 'email',
         });
       }
 

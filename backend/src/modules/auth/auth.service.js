@@ -9,6 +9,7 @@ import {
   getSupabaseClientForToken,
   initializeUserProfile,
 } from '../../config/supabase.js';
+import { AppError } from '../../core/errors/appError.js';
 import { error as _error, info, warn } from '../../core/errors/logger.js';
 import {
   getCurrentTestUser,
@@ -59,8 +60,37 @@ function generateRandomAvatarUrl(email, fullName) {
   return `https://ui-avatars.com/api/?name=${name}&background=random&size=128&bold=true`;
 }
 
+const EXISTING_ACCOUNT_SIGNUP_MESSAGE =
+  'An account with this email already exists. Please sign in instead.';
+const GOOGLE_ACCOUNT_SIGNUP_MESSAGE =
+  'This email is already registered through Google. Please continue with Google to sign in.';
+const GOOGLE_ACCOUNT_LOGIN_MESSAGE =
+  'This account was created with Google. Please sign in with Google instead of email and password.';
+
+const USER_LOOKUP_PAGE_SIZE = 100;
+const USER_LOOKUP_MAX_PAGES = 100;
+
+/**
+ * Supabase records the sign-in methods available for an account under
+ * app_metadata. `provider` is the most recent one and `providers` is the full
+ * list, so both are consulted before concluding that an account has no
+ * email/password credentials.
+ */
+function hasPasswordIdentity(user) {
+  const providers = Array.isArray(user?.app_metadata?.providers)
+    ? user.app_metadata.providers
+    : [];
+  return providers.includes('email') || user?.app_metadata?.provider === 'email';
+}
+
 class AuthService {
-  async _getOAuthLoginHint(email) {
+  /**
+   * Look up an auth user by email using the admin client.
+   * Returns null when the address is unknown, and also when the lookup itself
+   * fails - callers treat "unknown" as "let Supabase decide" rather than
+   * blocking a legitimate signup on a transient admin API error.
+   */
+  async _findAuthUserByEmail(email) {
     if (!email || shouldUseTestAuth()) {
       return null;
     }
@@ -68,12 +98,11 @@ class AuthService {
     try {
       const adminClient = getSupabaseAdminClient();
       const normalizedEmail = email.trim().toLowerCase();
-      const pageSize = 100;
 
-      for (let page = 1; page < 100; page += 1) {
+      for (let page = 1; page <= USER_LOOKUP_MAX_PAGES; page += 1) {
         const { data, error } = await adminClient.auth.admin.listUsers({
           page,
-          perPage: pageSize,
+          perPage: USER_LOOKUP_PAGE_SIZE,
         });
 
         if (error) {
@@ -87,25 +116,25 @@ class AuthService {
         );
 
         if (matchedUser) {
-          const providers = Array.isArray(matchedUser.app_metadata?.providers)
-            ? matchedUser.app_metadata.providers
-            : [];
-          const primaryProvider = matchedUser.app_metadata?.provider || null;
-          const hasPasswordIdentity = providers.includes('email') || primaryProvider === 'email';
-
-          if (!hasPasswordIdentity) {
-            return 'This account was created with Google. Please sign in with Google instead of email and password.';
-          }
-
-          return null;
+          return matchedUser;
         }
 
-        if (users.length < pageSize) {
+        if (users.length < USER_LOOKUP_PAGE_SIZE) {
           return null;
         }
       }
     } catch (error) {
       warn(`Failed to determine login provider for ${email}:`, error);
+    }
+
+    return null;
+  }
+
+  async _getOAuthLoginHint(email) {
+    const matchedUser = await this._findAuthUserByEmail(email);
+
+    if (matchedUser && !hasPasswordIdentity(matchedUser)) {
+      return GOOGLE_ACCOUNT_LOGIN_MESSAGE;
     }
 
     return null;
@@ -127,6 +156,24 @@ class AuthService {
         return result;
       }
 
+      // Supabase's email-enumeration protection makes signUp respond as if a
+      // duplicate address were brand new, so an existing account has to be
+      // detected up front to tell the user what actually happened.
+      const existingUser = await this._findAuthUserByEmail(email);
+      if (existingUser) {
+        if (!hasPasswordIdentity(existingUser)) {
+          throw new AppError(GOOGLE_ACCOUNT_SIGNUP_MESSAGE, 409);
+        }
+
+        if (existingUser.email_confirmed_at) {
+          throw new AppError(EXISTING_ACCOUNT_SIGNUP_MESSAGE, 409);
+        }
+
+        // An unconfirmed password account is not a usable login yet, so fall
+        // through and let Supabase resend the confirmation email.
+        info(`Resending signup verification for unconfirmed account ${email}`);
+      }
+
       const supabase = getSupabaseClient();
       const { data, error } = await supabase.auth.signUp({
         email,
@@ -140,6 +187,9 @@ class AuthService {
 
       if (error) {
         _error('Signup auth error:', error);
+        if (/already\s+(registered|exists)|user\s+already/i.test(error.message || '')) {
+          throw new AppError(EXISTING_ACCOUNT_SIGNUP_MESSAGE, 409);
+        }
         throw new Error(error.message || 'Failed to create user account');
       }
 
@@ -147,6 +197,13 @@ class AuthService {
       // clients/proxies that only expose it under data.session.user.
       const user = data?.user || data?.session?.user;
       const session = data?.session || null;
+
+      // Second line of defence for when the admin lookup above was unavailable:
+      // the decoy user returned for a duplicate address carries no identities,
+      // whereas a genuinely new signup always has at least one.
+      if (user && Array.isArray(user.identities) && user.identities.length === 0) {
+        throw new AppError(EXISTING_ACCOUNT_SIGNUP_MESSAGE, 409);
+      }
 
       if (!user) {
         // Supabase can intentionally omit the user object for an existing

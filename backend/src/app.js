@@ -34,33 +34,25 @@ const PORT = process.env.PORT
 app.use(helmet());
 
 // CORS - Enable cross-origin requests
-// Allow all localhost variations and common mobile simulator IPs
+// Loopback and private-LAN origins are allowed in development so a new DHCP
+// lease on the dev machine does not require editing an IP allowlist here.
+// Native mobile requests send no Origin header and are unaffected either way.
+const LOCAL_ORIGIN_PATTERN =
+  /^https?:\/\/(localhost|127\.0\.0\.1|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})(:\d+)?$/;
+
+const allowedOrigins = process.env.CORS_ORIGIN?.split(',').map((o) => o.trim());
+const isProduction = process.env.NODE_ENV === 'production';
+
 app.use(cors({
-  origin: process.env.CORS_ORIGIN?.split(',') || [
-    // Web/Desktop
-    'http://localhost:3000',
-    'http://localhost:5050',
-    'http://localhost:8081',  // Expo web dev server
-    'http://localhost:3005',  // Another common Expo port
-    'http://127.0.0.1:3000',
-    'http://127.0.0.1:5050',
-    'http://127.0.0.1:8081',
-    'http://127.0.0.1:3005',
-    // Mobile simulators
-    'http://192.168.1.1:8081',    // Common home network IP
-    'http://10.0.0.1:8081',       // Virtual machine networks
-    'http://10.0.2.2:8081',       // Android emulator localhost proxy
-    'http://172.20.10.14:8081',   // Docker/WSL networks
-    'http://172.20.10.14:5050',
-    'http://10.132.69.43:8081',   // Current development machine IP
-    'http://10.132.69.43:3000',
-    'http://10.132.69.43:3005',
-    'http://192.168.64.109:8081',  // Current development machine IP
-    'http://192.168.64.109:3000',
-    'http://192.168.64.109:3005'
-    // Add your local IP here (replace XXX.XXX.XXX.XXX with your IP)
-    // 'http://YOUR_LOCAL_IP:8081',
-  ],
+  origin: (origin, callback) => {
+    // No Origin header: native mobile clients, curl, same-origin requests.
+    if (!origin) return callback(null, true);
+
+    if (allowedOrigins?.includes(origin)) return callback(null, true);
+    if (!isProduction && LOCAL_ORIGIN_PATTERN.test(origin)) return callback(null, true);
+
+    return callback(new Error(`Origin not allowed by CORS: ${origin}`));
+  },
   credentials: true,
   optionsSuccessStatus: 200,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
