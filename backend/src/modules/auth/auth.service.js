@@ -32,6 +32,27 @@ function getBaseUrl(envKey, fallbackPort) {
   return `http://localhost:${process.env.PORT || fallbackPort}`;
 }
 
+function validateOAuthRedirectUri(redirectUri) {
+  if (!redirectUri) {
+    return null;
+  }
+
+  let parsed;
+  try {
+    parsed = new URL(redirectUri);
+  } catch {
+    throw new Error('Invalid OAuth redirect URI');
+  }
+
+  // Only app deep links are accepted. This prevents the OAuth endpoint from
+  // becoming an arbitrary redirector for authorization codes.
+  if (!['frontend:', 'exp:'].includes(parsed.protocol)) {
+    throw new Error('Unsupported OAuth redirect URI');
+  }
+
+  return redirectUri;
+}
+
 function generateRandomAvatarUrl(email, fullName) {
   const name = encodeURIComponent(fullName || email.split('@')[0] || 'user');
   // UI Avatars – free, consistent, no API key
@@ -279,8 +300,9 @@ class AuthService {
   /**
    * Google OAuth – get the URL to redirect the user to
    */
-  async googleSignIn() {
-    const redirectTo = `${getBaseUrl('BACKEND_URL', 3000)}/api/v1/auth/google/callback`;
+  async googleSignIn(customRedirectUri = null) {
+    const redirectTo = validateOAuthRedirectUri(customRedirectUri)
+      || `${getBaseUrl('BACKEND_URL', 3000)}/api/v1/auth/google/callback`;
 
     if (shouldUseTestAuth()) {
       return { url: getTestGoogleOAuthUrl(redirectTo) };

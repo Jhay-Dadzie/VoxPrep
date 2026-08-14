@@ -143,11 +143,13 @@ class AuthController {
   /**
    * GET /auth/google
    * Initiate Google OAuth
+   * Query: ?redirectUri=custom_redirect_uri (optional, for mobile apps)
    */
   async googleAuth(req, res) {
     try {
-      const { url } = await authService.googleSignIn();
-      return res.status(200).json({ success: true, url });
+      const { redirectUri } = req.query;
+      const { url } = await authService.googleSignIn(redirectUri);
+      return res.status(200).json({ success: true, data: { url } });
     } catch (error) {
       _error('Google OAuth init error:', error);
       return res.status(500).json({ success: false, message: error.message });
