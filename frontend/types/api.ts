@@ -32,6 +32,26 @@ export interface AuthResponse {
   }
 }
 
+export interface RefreshResponse {
+  success: boolean
+  message: string
+  data?: {
+    user?: {
+      id: string
+      email: string
+      full_name: string | null
+      is_active: boolean
+      profile_completed: boolean
+      created_at: string
+      updated_at: string
+    } | null
+    session?: {
+      access_token: string
+      refresh_token: string
+    } | null
+  }
+}
+
 export interface CurrentUserResponse {
   success: boolean
   data: {

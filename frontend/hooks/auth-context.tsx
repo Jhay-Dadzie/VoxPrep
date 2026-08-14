@@ -1,4 +1,5 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
+import { onSessionExpired } from '@/lib/session-events'
 import { getStoredUser, updateStoredUser, StoredUser } from '@/lib/token-storage'
 import { authService, SignupResult } from '@/services/auth'
 import { AuthError, toAuthError } from '@/services/error-handler'
@@ -49,6 +50,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       cancelled = true
     }
   }, [])
+
+  // The API client refreshes expired access tokens on its own; it only reports
+  // back when the refresh token is rejected, which is the one case where the
+  // user really does have to sign in again.
+  useEffect(
+    () =>
+      onSessionExpired(() => {
+        setUser(null)
+        setError(null)
+      }),
+    []
+  )
 
   const handleSignup = async (email: string, password: string, fullName?: string): Promise<SignupResult> => {
     setIsLoading(true)

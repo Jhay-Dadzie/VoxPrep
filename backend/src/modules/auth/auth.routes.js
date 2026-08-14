@@ -5,6 +5,7 @@
  * Endpoints:
  * - POST   /signup
  * - POST   /login
+ * - POST   /refresh
  * - POST   /logout (protected)
  * - POST   /change-password (protected)
  * - GET    /me (protected)
@@ -69,6 +70,13 @@ router.post(
   passwordLimiter,
   asyncHandler(authController.resetPassword.bind(authController))
 );
+
+/**
+ * POST /api/v1/auth/refresh
+ * Exchange a refresh token for a fresh session
+ * Body: { refresh_token? } - falls back to the refresh_token cookie
+ */
+router.post('/refresh', asyncHandler(authController.refresh.bind(authController)));
 
 /**
  * GET /api/v1/auth/google

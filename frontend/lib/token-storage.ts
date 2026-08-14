@@ -31,6 +31,20 @@ export const setTokens = async (accessToken: string, refreshToken: string, user:
   }
 }
 
+/**
+ * Replace the session tokens after a refresh, leaving the stored user intact.
+ */
+export const setSessionTokens = async (accessToken: string, refreshToken: string) => {
+  if (!accessToken || !refreshToken) {
+    throw new Error('Cannot store authentication tokens: the server returned an incomplete session')
+  }
+
+  await Promise.all([
+    AsyncStorage.setItem(ACCESS_TOKEN_KEY, accessToken),
+    AsyncStorage.setItem(REFRESH_TOKEN_KEY, refreshToken),
+  ])
+}
+
 export const getAccessToken = async (): Promise<string | null> => {
   try {
     return await AsyncStorage.getItem(ACCESS_TOKEN_KEY)

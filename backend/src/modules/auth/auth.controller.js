@@ -365,6 +365,48 @@ class AuthController {
   }
 
   /**
+   * POST /auth/refresh
+   *
+   * Deliberately unprotected: it is called precisely when the access token is
+   * no longer valid. The refresh token itself is the credential, read from the
+   * body (mobile) or the httpOnly cookie (web).
+   */
+  async refresh(req, res) {
+    const refreshToken = req.body?.refresh_token || req.cookies?.[REFRESH_TOKEN_COOKIE];
+
+    if (!refreshToken) {
+      return res.status(401).json({
+        success: false,
+        message: 'Refresh token required',
+      });
+    }
+
+    try {
+      const result = await authService.refreshSession(refreshToken);
+      setRefreshTokenCookie(res, result.session?.refresh_token);
+
+      return res.status(200).json({
+        success: true,
+        message: 'Session refreshed',
+        data: {
+          user: result.user,
+          session: result.session,
+        },
+      });
+    } catch (error) {
+      _error('Refresh controller error:', error);
+      // The stored refresh token is unusable, so drop the cookie too and let
+      // the client send the user back to sign-in.
+      clearRefreshTokenCookie(res);
+
+      return res.status(error.statusCode || 401).json({
+        success: false,
+        message: error.message || 'Invalid or expired refresh token',
+      });
+    }
+  }
+
+  /**
    * POST /auth/logout
    */
   async logout(req, res) {

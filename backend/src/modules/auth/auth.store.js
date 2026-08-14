@@ -135,6 +135,30 @@ export function getCurrentTestUser(accessToken) {
   };
 }
 
+export function refreshTestSession(refreshToken) {
+  const session = sessionsByRefreshToken.get(refreshToken);
+
+  if (!session) {
+    throw new Error('Invalid or expired refresh token');
+  }
+
+  const user = usersById.get(session.userId);
+
+  if (!user) {
+    throw new Error('Invalid or expired refresh token');
+  }
+
+  // Rotate: the old pair stops working once a new one is issued, mirroring
+  // Supabase's refresh token rotation.
+  sessionsByAccessToken.delete(session.access_token);
+  sessionsByRefreshToken.delete(refreshToken);
+
+  return {
+    user: toPublicUser(user),
+    session: createSession(user.id),
+  };
+}
+
 export function logoutTestUser(accessToken) {
   const session = sessionsByAccessToken.get(accessToken);
 

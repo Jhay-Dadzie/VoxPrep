@@ -17,6 +17,7 @@ import {
   loginTestUser,
   changeTestUserPassword,
   logoutTestUser,
+  refreshTestSession,
   requestTestPasswordReset,
   shouldUseTestAuth,
   signupTestUser,
@@ -465,6 +466,73 @@ class AuthService {
     }
 
     return { message: 'Verification code sent' };
+  }
+
+  /**
+   * Exchange a refresh token for a fresh session.
+   *
+   * Access tokens are short-lived by design, so the app trades its refresh
+   * token for a new pair whenever one expires. Supabase rotates the refresh
+   * token on every call and only invalidates it on sign-out, which is what
+   * keeps a session alive indefinitely for a user who never logs out.
+   */
+  async refreshSession(refreshToken) {
+    if (!refreshToken) {
+      throw new AppError('Refresh token required', 401);
+    }
+
+    if (shouldUseTestAuth()) {
+      try {
+        return refreshTestSession(refreshToken);
+      } catch (error) {
+        throw new AppError(error.message || 'Invalid or expired refresh token', 401);
+      }
+    }
+
+    const supabase = getSupabaseClient();
+    const { data, error } = await supabase.auth.refreshSession({ refresh_token: refreshToken });
+
+    if (error || !data?.session) {
+      warn('Session refresh failed:', error?.message || 'No session returned');
+      throw new AppError('Invalid or expired refresh token', 401);
+    }
+
+    const { session } = data;
+    const user = data.user || session.user;
+    let userProfile = null;
+
+    try {
+      const userSupabase = getSupabaseClientForToken(session.access_token);
+      const { data: profile } = await userSupabase
+        .from('users')
+        .select('*')
+        .eq('id', user.id)
+        .single();
+      userProfile = profile;
+    } catch (profileError) {
+      // A missing profile row must not cost the user their refreshed session.
+      warn(`Failed to load profile during refresh for ${user?.email}:`, profileError);
+    }
+
+    return {
+      user: {
+        id: user.id,
+        email: user.email,
+        full_name: userProfile?.full_name || null,
+        avatar_url: userProfile?.avatar_url || null,
+        is_active: userProfile?.is_active ?? true,
+        profile_completed: userProfile?.profile_completed ?? false,
+        created_at: userProfile?.created_at || user.created_at || new Date().toISOString(),
+        updated_at: userProfile?.updated_at || new Date().toISOString(),
+      },
+      session: {
+        access_token: session.access_token,
+        refresh_token: session.refresh_token,
+        expires_in: session.expires_in,
+        expires_at: session.expires_at,
+        token_type: session.token_type,
+      },
+    };
   }
 
   async logout(accessToken, userId) {
