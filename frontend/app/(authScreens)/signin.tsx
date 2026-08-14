@@ -15,7 +15,7 @@ import { getFieldError } from '@/services/error-handler'
 export default function Signin() {
   const colorScheme = useColorScheme()
   const colors = Colors[colorScheme ?? 'light']
-  const { login, isLoading, error, clearError } = useAuth()
+  const { login, googleSignIn, isLoading, error, clearError } = useAuth()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
 
@@ -25,6 +25,15 @@ export default function Signin() {
       await login(email, password)
     } catch (err) {
       console.error('Login failed:', err)
+    }
+  }
+
+  const handleGoogleSignIn = async () => {
+    try {
+      clearError()
+      await googleSignIn()
+    } catch (err) {
+      console.error('Google signin failed:', err)
     }
   }
 
@@ -86,11 +95,16 @@ export default function Signin() {
           </View>
 
           <View style={styles.social}>
-            {(['logo-google', 'logo-apple'] as const).map((n) => (
-              <Pressable key={n} style={[styles.socialBtn, { borderColor: colors.border }]}>
-                <Ionicons name={n} size={20} color={colors.oppositeColor} />
-              </Pressable>
-            ))}
+            <Pressable
+              style={[styles.socialBtn, { borderColor: colors.border }]}
+              onPress={handleGoogleSignIn}
+              disabled={isLoading}
+            >
+              <Ionicons name='logo-google' size={20} color={colors.oppositeColor} />
+            </Pressable>
+            <Pressable style={[styles.socialBtn, { borderColor: colors.border }]}>
+              <Ionicons name='logo-apple' size={20} color={colors.oppositeColor} />
+            </Pressable>
           </View>
 
           <View style={styles.bottom}>

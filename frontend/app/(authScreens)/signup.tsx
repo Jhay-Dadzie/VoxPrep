@@ -15,7 +15,7 @@ import { getFieldError } from '@/services/error-handler'
 export default function Signup() {
   const colorScheme = useColorScheme()
   const colors = Colors[colorScheme ?? 'light']
-  const { signup, isLoading, error, clearError } = useAuth()
+  const { signup, googleSignIn, isLoading, error, clearError } = useAuth()
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
   const [pw, setPw] = useState('')
@@ -40,6 +40,15 @@ export default function Signup() {
       }
     } catch (err) {
       console.error('Signup failed:', err)
+    }
+  }
+
+  const handleGoogleSignIn = async () => {
+    try {
+      clearError()
+      await googleSignIn()
+    } catch (err) {
+      console.error('Google signin failed:', err)
     }
   }
 
@@ -111,16 +120,18 @@ export default function Signup() {
           </View>
 
           <View style={styles.social}>
-            {(['Google', 'Apple'] as const).map((label) => (
-              <Pressable key={label} style={[styles.socialBtn, { borderColor: colors.border }]}>
-                <Ionicons
-                  name={label === 'Google' ? 'logo-google' : 'logo-apple'}
-                  size={18}
-                  color={colors.oppositeColor}
-                />
-                <ThemedText style={[styles.socialText, { color: colors.oppositeColor }]}>{label}</ThemedText>
-              </Pressable>
-            ))}
+            <Pressable
+              style={[styles.socialBtn, { borderColor: colors.border }]}
+              onPress={handleGoogleSignIn}
+              disabled={isLoading}
+            >
+              <Ionicons name='logo-google' size={18} color={colors.oppositeColor} />
+              <ThemedText style={[styles.socialText, { color: colors.oppositeColor }]}>Google</ThemedText>
+            </Pressable>
+            <Pressable style={[styles.socialBtn, { borderColor: colors.border }]}>
+              <Ionicons name='logo-apple' size={18} color={colors.oppositeColor} />
+              <ThemedText style={[styles.socialText, { color: colors.oppositeColor }]}>Apple</ThemedText>
+            </Pressable>
           </View>
 
           <View style={styles.bottom}>

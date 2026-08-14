@@ -10,6 +10,7 @@ export type AuthContextType = {
   error: AuthError | null
   signup: (email: string, password: string, fullName?: string) => Promise<SignupResult>
   login: (email: string, password: string) => Promise<void>
+  googleSignIn: () => Promise<void>
   logout: () => Promise<void>
   clearError: () => void
   updateUser: (updatedUser: Partial<StoredUser>) => Promise<void>
@@ -87,6 +88,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }
 
+  const handleGoogleSignIn = async () => {
+    setIsLoading(true)
+    setError(null)
+    try {
+      const loggedInUser = await authService.googleSignIn()
+      setUser(loggedInUser)
+    } catch (err) {
+      const authError = err instanceof AuthError ? err : new AuthError(String(err))
+      setError(authError)
+      throw authError
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
   const handleLogout = async () => {
     setIsLoading(true)
     try {
@@ -117,6 +133,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       error,
       signup: handleSignup,
       login: handleLogin,
+      googleSignIn: handleGoogleSignIn,
       logout: handleLogout,
       clearError: () => setError(null),
       updateUser: handleUpdateUser,
