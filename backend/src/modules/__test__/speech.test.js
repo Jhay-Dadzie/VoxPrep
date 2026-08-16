@@ -2,13 +2,14 @@
  * Speech Module Tests
  *
  * Coverage:
- *  - STT Service       — transcribeBuffer, transcribeUrl, _formatResult
- *  - TTS Service       — synthesize, synthesizeToStream, getAvailableVoices, _resolveOptions
+ *  - STT Service       — Deepgram transcribeBuffer/transcribeUrl, response shapes
+ *  - TTS Service       — Gemini synthesize, WAV framing, voices, _resolveOptions
  *  - Audio Service     — validateAudio, uploadAudio, getSignedUrl, deleteAudio
  *  - Speech Controller — all 5 endpoints via supertest (mocked services)
  *
  * Mocking strategy:
- *  - Deepgram SDK is mocked at the config level (jest.mock config/deepgram.js)
+ *  - Deepgram is mocked at the config level, shaped like SDK v5 (listen.v1.media)
+ *  - Gemini is reached over HTTP, so axios is mocked (jest.mock axios)
  *  - Supabase is mocked at the config level (jest.mock config/supabase.js)
  *  - Auth middleware is bypassed (req.user injected directly)
  *  - Each test resets mocks in beforeEach to avoid test pollution
@@ -17,22 +18,56 @@
 import { jest } from '@jest/globals';
 
 // ─── Mock Deepgram ────────────────────────────────────────────────────────────
+// Shaped as @deepgram/sdk v5: listen.v1.media, no listen.prerecorded. The
+// service supports both, and the tests below assert it reaches for the one the
+// installed SDK actually has — using the retired v3 path is how transcription
+// silently stopped working.
 const mockTranscribeFile = jest.fn();
 const mockTranscribeUrl  = jest.fn();
-const mockSpeakRequest   = jest.fn();
+
+const mockSpeakGenerate = jest.fn();
 
 jest.mock('../../config/deepgram.js', () => ({
   getDeepgramClient: jest.fn(() => ({
     listen: {
-      prerecorded: {
-        transcribeFile: mockTranscribeFile,
-        transcribeUrl:  mockTranscribeUrl,
+      v1: {
+        media: {
+          transcribeFile: mockTranscribeFile,
+          transcribeUrl:  mockTranscribeUrl,
+        },
       },
     },
     speak: {
-      request: mockSpeakRequest,
+      v1: {
+        audio: { generate: mockSpeakGenerate },
+      },
     },
   })),
+}));
+
+// ─── Mock Gemini transport (TTS) ──────────────────────────────────────────────
+const mockPost = jest.fn();
+const mockGet  = jest.fn();
+
+jest.mock('axios', () => ({
+  __esModule: true,
+  default: {
+    post: (...args) => mockPost(...args),
+    get:  (...args) => mockGet(...args),
+  },
+}));
+
+/**
+ * The services read their model ids and key from config at import time. Mocking
+ * the config rather than the environment keeps these tests independent of
+ * whatever .env happens to hold on the machine running them.
+ */
+jest.mock('../../config/gemini.js', () => ({
+  GEMINI_API_KEY: 'test-key',
+  GEMINI_ENDPOINT: 'https://generativelanguage.googleapis.com/v1beta',
+  GEMINI_MODEL: 'test-interviewer-model',
+  GEMINI_TTS_MODEL: 'test-tts-model-preview-tts',
+  GEMINI_ASSESSMENT_MODEL: 'test-assessment-model',
 }));
 
 // ─── Mock Supabase ────────────────────────────────────────────────────────────
@@ -88,12 +123,16 @@ jest.mock('../../core/utils/asyncHandler.js', () => ({
 
 // ─── Now import services (after mocks are set up) ────────────────────────────
 import sttService from '../speech/stt.service.js';
-import ttsService, { DEEPGRAM_VOICES } from '../speech/tts.service.js';
+import ttsService, { GEMINI_VOICES, TTS_SAMPLE_RATE } from '../speech/tts.service.js';
 import audioService, { SUPPORTED_AUDIO_TYPES, MAX_AUDIO_BYTES } from '../speech/audio.service.js';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-/** Build a minimal Deepgram pre-recorded response */
+/**
+ * A Deepgram v5 prerecorded response. Awaiting the SDK call yields the parsed
+ * body directly — there is no `{ data }` envelope, which is exactly the detail
+ * the previous implementation got wrong.
+ */
 const buildDgSTTResult = (transcript = 'Hello world', confidence = 0.98) => ({
   results: {
     channels: [{
@@ -116,44 +155,43 @@ const buildDgSTTResult = (transcript = 'Hello world', confidence = 0.98) => ({
   },
 });
 
-/** Build a minimal Web ReadableStream from a Buffer */
-const bufferToWebStream = (buf) =>
-  new ReadableStream({
-    start(controller) {
-      controller.enqueue(new Uint8Array(buf));
-      controller.close();
-    },
-  });
+/** A generateContent response carrying an audio part (synthesis). */
+const buildAudioResponse = (pcm = Buffer.from('raw-pcm-samples')) => ({
+  data: {
+    candidates: [
+      {
+        content: {
+          parts: [
+            { inlineData: { mimeType: 'audio/L16;codec=pcm;rate=24000', data: pcm.toString('base64') } },
+          ],
+        },
+      },
+    ],
+  },
+});
+
+/** The body of the last Gemini request, for asserting what was sent. */
+const lastRequestBody = () => mockPost.mock.calls.at(-1)[1];
+const lastRequestUrl = () => mockPost.mock.calls.at(-1)[0];
 
 // ─────────────────────────────────────────────────────────────────────────────
 // STT Service Tests
 // ─────────────────────────────────────────────────────────────────────────────
 describe('STT Service', () => {
   beforeEach(() => jest.clearAllMocks());
-  beforeEach(() => {
-    mockStorageUpload.mockResolvedValue({
-      data: { path: 'user-uuid-123/transcribe/audio_123.webm' },
-      error: null,
-    });
-    mockStorageCreateSigned.mockResolvedValue({
-      data: { signedUrl: 'https://signed.supabase.co/audio.webm' },
-      error: null,
-    });
-  });
 
   describe('transcribeBuffer', () => {
     it('should return a shaped transcript on success', async () => {
-      const dgResult = buildDgSTTResult('Tell me about yourself', 0.95);
-      mockTranscribeFile.mockResolvedValue({ data: dgResult, rawResponse: {} });
+      mockTranscribeFile.mockResolvedValue(buildDgSTTResult('Tell me about yourself', 0.95));
 
       const buf = Buffer.from('fake-audio');
-      const result = await sttService.transcribeBuffer(buf, 'audio/webm');
+      const result = await sttService.transcribeBuffer(buf, 'audio/m4a');
 
       expect(mockTranscribeFile).toHaveBeenCalledWith(
         expect.objectContaining({
           data: buf,
-          contentType: 'audio/webm',
-          filename: 'audio.webm',
+          contentType: 'audio/m4a',
+          filename: 'audio.m4a',
         }),
         expect.objectContaining({ model: 'nova-2', smart_format: true })
       );
@@ -166,8 +204,29 @@ describe('STT Service', () => {
       expect(result.request_id).toBe('req-abc123');
     });
 
+    /**
+     * The v5 SDK returns the parsed body itself. Reading it as a `{ data }`
+     * envelope yields an empty transcript, which the controller then reports as
+     * a failed transcription — audio stored, nothing transcribed.
+     */
+    it('should read a v5 response that is the parsed body itself', async () => {
+      mockTranscribeFile.mockResolvedValue(buildDgSTTResult('Body, not envelope', 0.9));
+
+      const result = await sttService.transcribeBuffer(Buffer.from('audio'), 'audio/m4a');
+
+      expect(result.transcript).toBe('Body, not envelope');
+    });
+
+    it('should still read an older { data } envelope', async () => {
+      mockTranscribeFile.mockResolvedValue({ data: buildDgSTTResult('Wrapped', 0.9), rawResponse: {} });
+
+      const result = await sttService.transcribeBuffer(Buffer.from('audio'), 'audio/m4a');
+
+      expect(result.transcript).toBe('Wrapped');
+    });
+
     it('should merge caller options with defaults', async () => {
-      mockTranscribeFile.mockResolvedValue({ data: buildDgSTTResult(), rawResponse: {} });
+      mockTranscribeFile.mockResolvedValue(buildDgSTTResult());
 
       await sttService.transcribeBuffer(Buffer.from('audio'), 'audio/mp3', {
         language: 'es',
@@ -176,11 +235,7 @@ describe('STT Service', () => {
       });
 
       expect(mockTranscribeFile).toHaveBeenCalledWith(
-        expect.objectContaining({
-          data: expect.any(Buffer),
-          contentType: 'audio/mp3',
-          filename: 'audio.mp3',
-        }),
+        expect.objectContaining({ contentType: 'audio/mp3', filename: 'audio.mp3' }),
         expect.objectContaining({ language: 'es', diarize: true, utterances: true, model: 'nova-2' })
       );
     });
@@ -189,19 +244,33 @@ describe('STT Service', () => {
       mockTranscribeFile.mockResolvedValue({ result: null, error: { message: 'Bad audio' } });
 
       await expect(
-        sttService.transcribeBuffer(Buffer.from('audio'), 'audio/webm')
+        sttService.transcribeBuffer(Buffer.from('audio'), 'audio/m4a')
       ).rejects.toThrow('Transcription failed: Bad audio');
+    });
+
+    /** The typed SDK error carries the useful detail in `body`, not `message`. */
+    it('should surface the detail from a thrown SDK error', async () => {
+      const err = new Error('Bad Request');
+      err.statusCode = 400;
+      err.body = { err_msg: 'failed to process audio: corrupt or unsupported data' };
+      mockTranscribeFile.mockRejectedValue(err);
+
+      await expect(
+        sttService.transcribeBuffer(Buffer.from('audio'), 'audio/m4a')
+      ).rejects.toThrow(/corrupt or unsupported data/);
     });
 
     it('should throw on empty buffer', async () => {
       await expect(
-        sttService.transcribeBuffer(Buffer.alloc(0), 'audio/webm')
+        sttService.transcribeBuffer(Buffer.alloc(0), 'audio/m4a')
       ).rejects.toThrow('non-empty audio buffer');
     });
 
     it('should handle missing result fields gracefully', async () => {
-      mockTranscribeFile.mockResolvedValue({ data: {}, rawResponse: {} });
-      const result = await sttService.transcribeBuffer(Buffer.from('audio'), 'audio/webm');
+      mockTranscribeFile.mockResolvedValue({});
+
+      const result = await sttService.transcribeBuffer(Buffer.from('audio'), 'audio/m4a');
+
       expect(result.transcript).toBe('');
       expect(result.confidence).toBe(0);
       expect(result.words).toEqual([]);
@@ -210,16 +279,13 @@ describe('STT Service', () => {
   });
 
   describe('transcribeUrl', () => {
-    it('should pass the URL to Deepgram and return transcript', async () => {
-      const dgResult = buildDgSTTResult('What is your greatest strength?', 0.97);
-      mockTranscribeUrl.mockResolvedValue({ data: dgResult, rawResponse: {} });
+    it('should pass the URL to Deepgram and return the transcript', async () => {
+      mockTranscribeUrl.mockResolvedValue(buildDgSTTResult('What is your greatest strength?', 0.97));
 
-      const result = await sttService.transcribeUrl(
-        'https://storage.example.com/audio.mp3'
-      );
+      const result = await sttService.transcribeUrl('https://storage.example.com/audio.m4a');
 
       expect(mockTranscribeUrl).toHaveBeenCalledWith(
-        { url: 'https://storage.example.com/audio.mp3' },
+        { url: 'https://storage.example.com/audio.m4a' },
         expect.objectContaining({ model: 'nova-2' })
       );
       expect(result.transcript).toBe('What is your greatest strength?');
@@ -232,8 +298,9 @@ describe('STT Service', () => {
 
     it('should throw when Deepgram returns an error', async () => {
       mockTranscribeUrl.mockResolvedValue({ error: { message: 'Forbidden' } });
+
       await expect(
-        sttService.transcribeUrl('https://example.com/audio.mp3')
+        sttService.transcribeUrl('https://example.com/audio.m4a')
       ).rejects.toThrow('Transcription failed: Forbidden');
     });
   });
@@ -248,7 +315,7 @@ describe('TTS Service', () => {
   describe('getAvailableVoices', () => {
     it('should return all voices with required fields', () => {
       const voices = ttsService.getAvailableVoices();
-      expect(voices.length).toBe(Object.keys(DEEPGRAM_VOICES).length);
+      expect(voices.length).toBe(Object.keys(GEMINI_VOICES).length);
       voices.forEach(v => {
         expect(v).toHaveProperty('key');
         expect(v).toHaveProperty('model');
@@ -260,22 +327,19 @@ describe('TTS Service', () => {
   });
 
   describe('_resolveOptions', () => {
-    it('should use default voice and encoding when not specified', () => {
+    it('should use the default voice when none is specified', () => {
       const opts = ttsService._resolveOptions('Hello', {});
-      expect(opts.voice).toBe('asteria');
-      expect(opts.encoding).toBe('mp3');
-      expect(opts.sample_rate).toBe(24000);
-      expect(opts.model).toBe('aura-asteria-en');
+      expect(opts.voice).toBe('kore');
+      expect(opts.voiceName).toBe('Kore');
+      expect(opts.style).toMatch(/interviewer/i);
     });
 
-    it('should resolve named voice to its model', () => {
-      const opts = ttsService._resolveOptions('Hello', { voice: 'orion' });
-      expect(opts.model).toBe('aura-orion-en');
+    it('should resolve a named voice to its model voice name', () => {
+      expect(ttsService._resolveOptions('Hello', { voice: 'orus' }).voiceName).toBe('Orus');
     });
 
-    it('should allow raw model string as fallback', () => {
-      const opts = ttsService._resolveOptions('Hello', { voice: 'aura-zeus-en' });
-      expect(opts.model).toBe('aura-zeus-en');
+    it('should allow a raw voice name as fallback', () => {
+      expect(ttsService._resolveOptions('Hello', { voice: 'Zephyr' }).voiceName).toBe('Zephyr');
     });
 
     it('should throw on empty text', () => {
@@ -289,41 +353,100 @@ describe('TTS Service', () => {
   });
 
   describe('synthesize', () => {
-    it('should return a buffer and metadata on success', async () => {
-      const audioData = Buffer.from('fake-mp3-bytes');
-      mockSpeakRequest.mockResolvedValue({
-        getStream: () => Promise.resolve(bufferToWebStream(audioData)),
-      });
+    it('should request audio in the chosen voice', async () => {
+      mockPost.mockResolvedValue(buildAudioResponse());
 
-      const result = await ttsService.synthesize('Tell me about yourself', { voice: 'asteria' });
+      const result = await ttsService.synthesize('Tell me about yourself', { voice: 'orus' });
 
-      expect(mockSpeakRequest).toHaveBeenCalledWith(
-        { text: 'Tell me about yourself' },
-        { model: 'aura-asteria-en', encoding: 'mp3', sample_rate: 24000 }
+      expect(lastRequestUrl()).toMatch(/-tts:generateContent$/);
+      expect(lastRequestBody().generationConfig).toEqual(
+        expect.objectContaining({
+          responseModalities: ['AUDIO'],
+          speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Orus' } } },
+        })
       );
-      expect(Buffer.isBuffer(result.buffer)).toBe(true);
-      expect(result.content_type).toBe('audio/mpeg');
+      expect(result.voice).toBe('orus');
       expect(result.character_count).toBe(22);
-      expect(result.voice).toBe('asteria');
-    });
-
-    it('should use orion voice and wav encoding when specified', async () => {
-      mockSpeakRequest.mockResolvedValue({
-        getStream: () => Promise.resolve(bufferToWebStream(Buffer.from('wav-bytes'))),
-      });
-
-      const result = await ttsService.synthesize('Hello', { voice: 'orion', encoding: 'wav' });
-
-      expect(mockSpeakRequest).toHaveBeenCalledWith(
-        { text: 'Hello' },
-        expect.objectContaining({ model: 'aura-orion-en', encoding: 'wav' })
-      );
       expect(result.content_type).toBe('audio/wav');
     });
 
-    it('should throw when getStream returns null', async () => {
-      mockSpeakRequest.mockResolvedValue({ getStream: () => Promise.resolve(null) });
-      await expect(ttsService.synthesize('Hello')).rejects.toThrow('no audio stream');
+    it('should speak the text with delivery direction, not the direction alone', async () => {
+      mockPost.mockResolvedValue(buildAudioResponse());
+
+      await ttsService.synthesize('Why did you leave?', { style: 'Say this warmly' });
+
+      expect(lastRequestBody().contents[0].parts[0].text).toBe('Say this warmly: Why did you leave?');
+    });
+
+    /**
+     * Gemini returns headerless PCM, which no mobile player can open. The
+     * service has to frame it before the bytes leave the server.
+     */
+    it('should wrap the returned PCM in a playable WAV container', async () => {
+      const pcm = Buffer.from('raw-pcm-samples');
+      mockPost.mockResolvedValue(buildAudioResponse(pcm));
+
+      const { buffer } = await ttsService.synthesize('Hello');
+
+      expect(buffer.length).toBe(44 + pcm.length);
+      expect(buffer.subarray(0, 4).toString()).toBe('RIFF');
+      expect(buffer.subarray(8, 12).toString()).toBe('WAVE');
+      expect(buffer.readUInt16LE(22)).toBe(1);              // mono
+      expect(buffer.readUInt32LE(24)).toBe(TTS_SAMPLE_RATE); // 24 kHz
+      expect(buffer.readUInt16LE(34)).toBe(16);              // 16-bit samples
+      expect(buffer.readUInt32LE(40)).toBe(pcm.length);      // data chunk length
+      expect(buffer.subarray(44).equals(pcm)).toBe(true);
+    });
+
+    it('should throw when the response carries no audio', async () => {
+      mockPost.mockResolvedValue({ data: { candidates: [{ finishReason: 'SAFETY', content: { parts: [] } }] } });
+
+      await expect(ttsService.synthesize('Hello')).rejects.toThrow(/no audio \(SAFETY\)/);
+    });
+
+    /**
+     * Gemini's free TTS tier is ten requests a minute and a long interview can
+     * reach it. A rate-limited question must still be spoken, so the other
+     * provider answers instead of the candidate being left reading.
+     */
+    it('should fall back to Deepgram when Gemini is rate-limited', async () => {
+      mockPost.mockRejectedValue({
+        response: { status: 429, data: { error: { message: 'Quota exceeded' } } },
+      });
+      mockSpeakGenerate.mockResolvedValue({
+        arrayBuffer: async () => Buffer.from('mp3-bytes'),
+      });
+
+      const result = await ttsService.synthesize('Tell me about yourself', { voice: 'orus' });
+
+      expect(mockSpeakGenerate).toHaveBeenCalledWith(
+        expect.objectContaining({ text: 'Tell me about yourself', encoding: 'mp3' })
+      );
+      expect(result.content_type).toBe('audio/mpeg');
+      expect(result.buffer.toString()).toBe('mp3-bytes');
+    });
+
+    it('should pick a fallback voice matching the register of the chosen one', async () => {
+      mockPost.mockRejectedValue({ response: { status: 503, data: {} } });
+      mockSpeakGenerate.mockResolvedValue({ arrayBuffer: async () => Buffer.from('mp3') });
+
+      await ttsService.synthesize('Hello', { voice: 'orus' });          // male
+      expect(mockSpeakGenerate.mock.calls.at(-1)[0].model).toMatch(/apollo/);
+
+      await ttsService.synthesize('Hello', { voice: 'kore' });          // female
+      expect(mockSpeakGenerate.mock.calls.at(-1)[0].model).toMatch(/thalia/);
+    });
+
+    it('should report the original failure when both providers fail', async () => {
+      mockPost.mockRejectedValue({
+        response: { status: 429, data: { error: { message: 'Quota exceeded' } } },
+      });
+      mockSpeakGenerate.mockRejectedValue(new Error('Deepgram is down too'));
+
+      await expect(ttsService.synthesize('Hello')).rejects.toMatchObject({
+        message: 'Quota exceeded',
+        statusCode: 429,
+      });
     });
   });
 });
@@ -336,19 +459,19 @@ describe('Audio Service', () => {
 
   describe('validateAudio', () => {
     it('should return true for valid buffer and mimetype', () => {
-      expect(audioService.validateAudio(Buffer.from('data'), 'audio/webm')).toBe(true);
+      expect(audioService.validateAudio(Buffer.from('data'), 'audio/aac')).toBe(true);
       expect(audioService.validateAudio(Buffer.from('data'), 'audio/mpeg')).toBe(true);
       expect(audioService.validateAudio(Buffer.from('data'), 'audio/wav')).toBe(true);
     });
 
     it('should throw on empty buffer', () => {
-      expect(() => audioService.validateAudio(Buffer.alloc(0), 'audio/webm'))
+      expect(() => audioService.validateAudio(Buffer.alloc(0), 'audio/wav'))
         .toThrow('empty');
     });
 
     it('should throw when file exceeds size limit', () => {
       const bigBuffer = Buffer.alloc(MAX_AUDIO_BYTES + 1);
-      expect(() => audioService.validateAudio(bigBuffer, 'audio/webm'))
+      expect(() => audioService.validateAudio(bigBuffer, 'audio/wav'))
         .toThrow('exceeds');
     });
 
@@ -368,19 +491,19 @@ describe('Audio Service', () => {
 
   describe('uploadAudio', () => {
     it('should upload buffer and return path and signed URL', async () => {
-      mockStorageUpload.mockResolvedValue({ data: { path: 'user-1/sess-1/q1_123_abc.webm' }, error: null });
+      mockStorageUpload.mockResolvedValue({ data: { path: 'user-1/sess-1/q1_123_abc.wav' }, error: null });
       mockStorageCreateSigned.mockResolvedValue({ data: { signedUrl: 'https://storage.example.com/signed' }, error: null });
 
       const result = await audioService.uploadAudio(
-        Buffer.from('audio'), 'audio/webm', 'user-1', { sessionId: 'sess-1', questionId: 'q1' }
+        Buffer.from('audio'), 'audio/wav', 'user-1', { sessionId: 'sess-1', questionId: 'q1' }
       );
 
       expect(mockStorageUpload).toHaveBeenCalledWith(
         expect.stringMatching(/^user-1\/sess-1\/q1_/),
         Buffer.from('audio'),
-        { contentType: 'audio/webm', upsert: false }
+        { contentType: 'audio/wav', upsert: false }
       );
-      expect(result.path).toBe('user-1/sess-1/q1_123_abc.webm');
+      expect(result.path).toBe('user-1/sess-1/q1_123_abc.wav');
       expect(result.url).toBe('https://storage.example.com/signed');
     });
 
@@ -388,7 +511,7 @@ describe('Audio Service', () => {
       mockStorageUpload.mockResolvedValue({ data: null, error: { message: 'Bucket not found' } });
 
       await expect(
-        audioService.uploadAudio(Buffer.from('audio'), 'audio/webm', 'u', { sessionId: 's', questionId: 'q' })
+        audioService.uploadAudio(Buffer.from('audio'), 'audio/wav', 'u', { sessionId: 's', questionId: 'q' })
       ).rejects.toThrow('Failed to upload audio: Bucket not found');
     });
   });
@@ -399,17 +522,17 @@ describe('Audio Service', () => {
         data: { signedUrl: 'https://signed-url' }, error: null,
       });
 
-      const url = await audioService.getSignedUrl('some/path.webm');
+      const url = await audioService.getSignedUrl('some/path.wav');
       expect(url).toBe('https://signed-url');
-      expect(mockStorageCreateSigned).toHaveBeenCalledWith('some/path.webm', 3600);
+      expect(mockStorageCreateSigned).toHaveBeenCalledWith('some/path.wav', 3600);
     });
 
     it('should use custom expiresIn', async () => {
       mockStorageCreateSigned.mockResolvedValue({
         data: { signedUrl: 'https://signed-url' }, error: null,
       });
-      await audioService.getSignedUrl('some/path.webm', 7200);
-      expect(mockStorageCreateSigned).toHaveBeenCalledWith('some/path.webm', 7200);
+      await audioService.getSignedUrl('some/path.wav', 7200);
+      expect(mockStorageCreateSigned).toHaveBeenCalledWith('some/path.wav', 7200);
     });
 
     it('should throw on storage error', async () => {
@@ -421,14 +544,14 @@ describe('Audio Service', () => {
   describe('deleteAudio', () => {
     it('should return true on successful deletion', async () => {
       mockStorageRemove.mockResolvedValue({ error: null });
-      const result = await audioService.deleteAudio('path/to/audio.webm');
+      const result = await audioService.deleteAudio('path/to/audio.wav');
       expect(result).toBe(true);
-      expect(mockStorageRemove).toHaveBeenCalledWith(['path/to/audio.webm']);
+      expect(mockStorageRemove).toHaveBeenCalledWith(['path/to/audio.wav']);
     });
 
     it('should return false (not throw) on deletion failure', async () => {
       mockStorageRemove.mockResolvedValue({ error: { message: 'File not found' } });
-      const result = await audioService.deleteAudio('missing/audio.webm');
+      const result = await audioService.deleteAudio('missing/audio.wav');
       expect(result).toBe(false); // warn, not throw
     });
   });
@@ -464,11 +587,11 @@ describe('Speech Controller (HTTP)', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockStorageUpload.mockResolvedValue({
-      data: { path: 'user-uuid-123/transcribe/audio_123.webm' },
+      data: { path: 'user-uuid-123/transcribe/audio_123.wav' },
       error: null,
     });
     mockStorageCreateSigned.mockResolvedValue({
-      data: { signedUrl: 'https://signed.supabase.co/audio.webm' },
+      data: { signedUrl: 'https://signed.supabase.co/audio.wav' },
       error: null,
     });
   });
@@ -493,8 +616,8 @@ describe('Speech Controller (HTTP)', () => {
       const res = await request.get('/api/v1/speech/formats');
       expect(res.status).toBe(200);
       expect(res.body.status).toBe('success');
-      expect(res.body.data).toContain('audio/webm');
-      expect(res.body.data).toContain('audio/mpeg');
+      expect(res.body.data).toContain('audio/aac');
+      expect(res.body.data).toContain('audio/wav');
     });
   });
 
@@ -523,69 +646,90 @@ describe('Speech Controller (HTTP)', () => {
     });
 
     it('should transcribe a valid audio file', async () => {
-      const dgResult = buildDgSTTResult('I am a software engineer', 0.96);
-      mockTranscribeFile.mockResolvedValue({ data: dgResult, rawResponse: {} });
+      mockTranscribeFile.mockResolvedValue(buildDgSTTResult('I am a software engineer', 0.96));
 
       const res = await request
         .post('/api/v1/speech/transcribe')
-        .attach('audio', Buffer.from('fake-webm'), { filename: 'answer.webm', contentType: 'audio/webm' });
+        .attach('audio', Buffer.from('fake-m4a'), { filename: 'answer.m4a', contentType: 'audio/m4a' });
 
       expect(res.status).toBe(200);
       expect(res.body.status).toBe('success');
       expect(res.body.data.transcript).toBe('I am a software engineer');
       expect(res.body.data.confidence).toBe(0.96);
       expect(res.body.data.duration).toBe(1.2);
-      expect(res.body.data.audio_url).toBe('https://signed.supabase.co/audio.webm');
-      expect(res.body.data.storage_path).toBe('user-uuid-123/transcribe/audio_123.webm');
+      expect(res.body.data.audio_url).toBe('https://signed.supabase.co/audio.wav');
+      expect(res.body.data.storage_path).toBe('user-uuid-123/transcribe/audio_123.wav');
       expect(mockStorageUpload).toHaveBeenCalled();
     });
 
-    it('should upload audio with session/question context when provided', async () => {
-      const dgResult = buildDgSTTResult('My weakness is perfectionism', 0.94);
-      mockTranscribeFile.mockResolvedValue({ data: dgResult, rawResponse: {} });
-      mockStorageUpload.mockResolvedValue({
-        data: { path: 'user-uuid-123/sess-1/q1_ts_abc.webm' }, error: null,
-      });
-      mockStorageCreateSigned.mockResolvedValue({
-        data: { signedUrl: 'https://signed.supabase.co/audio.webm' }, error: null,
-      });
+    /**
+     * The provider measures duration from the audio itself, which is more
+     * accurate than the client's stopwatch — the client value is only a
+     * fallback for a provider that reports none.
+     */
+    it('should prefer the measured duration over the client-supplied one', async () => {
+      mockTranscribeFile.mockResolvedValue(buildDgSTTResult('A short answer', 0.9));
 
       const res = await request
         .post('/api/v1/speech/transcribe')
-        .field('session_id', '550e8400-e29b-41d4-a716-446655440000')
-        .field('question_id', '550e8400-e29b-41d4-a716-446655440001')
-        .attach('audio', Buffer.from('fake-webm'), { filename: 'answer.webm', contentType: 'audio/webm' });
+        .field('duration_seconds', '42')
+        .attach('audio', Buffer.from('fake-m4a'), { filename: 'answer.m4a', contentType: 'audio/m4a' });
 
       expect(res.status).toBe(200);
-      expect(res.body.data.transcript).toBe('My weakness is perfectionism');
-      expect(res.body.data.audio_url).toBe('https://signed.supabase.co/audio.webm');
-      expect(res.body.data.storage_path).toBe('user-uuid-123/sess-1/q1_ts_abc.webm');
+      expect(res.body.data.duration).toBe(1.2);
+    });
+
+    it('should fall back to the client duration when none was measured', async () => {
+      const noDuration = buildDgSTTResult('A short answer', 0.9);
+      noDuration.metadata.duration = null;
+      mockTranscribeFile.mockResolvedValue(noDuration);
+
+      const res = await request
+        .post('/api/v1/speech/transcribe')
+        .field('duration_seconds', '42')
+        .attach('audio', Buffer.from('fake-m4a'), { filename: 'answer.m4a', contentType: 'audio/m4a' });
+
+      expect(res.body.data.duration).toBe(42);
+    });
+
+    /**
+     * Silence is not an answer of nothing — it is a failure to hear one, and
+     * the client needs to know so it can offer a typed answer.
+     */
+    it('should report an empty transcript as a partial result, not a success', async () => {
+      mockTranscribeFile.mockResolvedValue(buildDgSTTResult('   ', 0));
+
+      const res = await request
+        .post('/api/v1/speech/transcribe')
+        .attach('audio', Buffer.from('silence'), { filename: 'answer.m4a', contentType: 'audio/m4a' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.status).toBe('partial');
+      expect(res.body.data.transcript).toBeNull();
+      expect(res.body.data.audio_url).toBe('https://signed.supabase.co/audio.wav');
     });
 
     it('should still transcribe when session_id is missing', async () => {
-      const dgResult = buildDgSTTResult('No session is fine', 0.91);
-      mockTranscribeFile.mockResolvedValue({ data: dgResult, rawResponse: {} });
+      mockTranscribeFile.mockResolvedValue(buildDgSTTResult('No session is fine', 0.91));
 
       const res = await request
         .post('/api/v1/speech/transcribe')
-        .attach('audio', Buffer.from('audio'), { filename: 'a.webm', contentType: 'audio/webm' });
+        .attach('audio', Buffer.from('audio'), { filename: 'a.m4a', contentType: 'audio/m4a' });
 
       expect(res.status).toBe(200);
       expect(res.body.data.transcript).toBe('No session is fine');
-      expect(res.body.data.audio_url).toBe('https://signed.supabase.co/audio.webm');
-      expect(res.body.data.storage_path).toBe('user-uuid-123/transcribe/audio_123.webm');
+      expect(res.body.data.storage_path).toBe('user-uuid-123/transcribe/audio_123.wav');
     });
   });
 
   // ── POST /transcribe-url ────────────────────────────────────────────────────
   describe('POST /api/v1/speech/transcribe-url', () => {
     it('should transcribe audio from a URL', async () => {
-      const dgResult = buildDgSTTResult('Describe a challenge you overcame', 0.93);
-      mockTranscribeUrl.mockResolvedValue({ data: dgResult, rawResponse: {} });
+      mockTranscribeUrl.mockResolvedValue(buildDgSTTResult('Describe a challenge you overcame', 0.93));
 
       const res = await request
         .post('/api/v1/speech/transcribe-url')
-        .send({ url: 'https://storage.supabase.co/audio.mp3' });
+        .send({ url: 'https://storage.supabase.co/audio.m4a' });
 
       expect(res.status).toBe(200);
       expect(res.body.data.transcript).toBe('Describe a challenge you overcame');
@@ -607,35 +751,29 @@ describe('Speech Controller (HTTP)', () => {
 
   // ── POST /synthesize ────────────────────────────────────────────────────────
   describe('POST /api/v1/speech/synthesize', () => {
-    it('should return audio stream for valid text', async () => {
-      const fakeAudio = Buffer.from('MP3-audio-bytes');
-      mockSpeakRequest.mockResolvedValue({
-        getStream: () => Promise.resolve(bufferToWebStream(fakeAudio)),
-      });
+    it('should return WAV audio for valid text', async () => {
+      mockPost.mockResolvedValue(buildAudioResponse());
 
       const res = await request
         .post('/api/v1/speech/synthesize')
         .send({ text: 'Tell me about yourself.' });
 
       expect(res.status).toBe(200);
-      expect(res.headers['content-type']).toMatch(/audio\/mpeg/);
-      expect(res.headers['x-voice']).toBe('asteria');
+      expect(res.headers['content-type']).toMatch(/audio\/wav/);
+      expect(res.headers['x-voice']).toBe('kore');
     });
 
-    it('should use specified voice and encoding', async () => {
-      mockSpeakRequest.mockResolvedValue({
-        getStream: () => Promise.resolve(bufferToWebStream(Buffer.from('wav'))),
-      });
+    it('should map a roster voice id to its catalogue voice', async () => {
+      mockPost.mockResolvedValue(buildAudioResponse());
 
       const res = await request
         .post('/api/v1/speech/synthesize')
-        .send({ text: 'Question for you.', voice: 'orion', encoding: 'wav' });
+        .send({ text: 'Question for you.', voice: 'm_direct_02' });
 
-      expect(mockSpeakRequest).toHaveBeenCalledWith(
-        { text: 'Question for you.' },
-        expect.objectContaining({ model: 'aura-orion-en', encoding: 'wav' })
-      );
       expect(res.status).toBe(200);
+      expect(lastRequestBody().generationConfig.speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName)
+        .toBe('Alnilam');
+      expect(res.headers['x-voice']).toBe('alnilam');
     });
 
     it('should return 400 when text is missing', async () => {
@@ -657,11 +795,30 @@ describe('Speech Controller (HTTP)', () => {
       expect(res.body.message).toMatch(/4096/);
     });
 
-    it('should return 400 for invalid encoding', async () => {
+    it('should return 400 for an encoding it cannot produce', async () => {
       const res = await request
         .post('/api/v1/speech/synthesize')
-        .send({ text: 'Hello', encoding: 'mp5' });
+        .send({ text: 'Hello', encoding: 'flac' });
       expect(res.status).toBe(400);
+    });
+
+    /**
+     * The format depends on which provider answered, so the client reads the
+     * Content-Type to name the cached file. Getting this wrong hands the player
+     * an undecodable extension, which is silence with no error.
+     */
+    it('should state the real format when the fallback provider answers', async () => {
+      mockPost.mockRejectedValue({
+        response: { status: 429, data: { error: { message: 'Quota exceeded' } } },
+      });
+      mockSpeakGenerate.mockResolvedValue({ arrayBuffer: async () => Buffer.from('mp3-bytes') });
+
+      const res = await request
+        .post('/api/v1/speech/synthesize')
+        .send({ text: 'Tell me about yourself.' });
+
+      expect(res.status).toBe(200);
+      expect(res.headers['content-type']).toMatch(/audio\/mpeg/);
     });
   });
 });

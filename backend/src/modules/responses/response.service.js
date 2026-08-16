@@ -297,7 +297,7 @@ class ResponseService {
    * to make the internal-only nature explicit.
    *
    * @param {string} responseId
-   * @param {number} confidence  - 0–1 value from Deepgram
+   * @param {number} confidence  - 0–1 value from the transcription provider
    * @returns {Promise<void>}
    */
   async patchConfidence(responseId, confidence) {
