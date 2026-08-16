@@ -56,6 +56,7 @@ export const createSessionQuestions = async (sessionId, options = {}) => {
     userId = null,
     jobData = null,
     questionCount = 10,
+    mode = null,
   } = options;
 
   const readSupabase = getReadSupabase({ supabaseClient, accessToken });
@@ -92,7 +93,7 @@ export const createSessionQuestions = async (sessionId, options = {}) => {
     throw new Error("Job data is required to generate AI interview questions");
   }
 
-  const questions = await generateQuestions(resolvedJobData, { questionCount });
+  const questions = await generateQuestions(resolvedJobData, { questionCount, mode });
 
   if (!Array.isArray(questions)) {
     throw new Error("AI service failed to return a valid question list");

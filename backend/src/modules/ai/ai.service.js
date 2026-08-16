@@ -1,7 +1,5 @@
 import axios from "axios";
-import { GEMINI_API_KEY, GEMINI_MODEL } from "../../config/gemini.js";
-
-const GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta";
+import { GEMINI_API_KEY, GEMINI_ENDPOINT, GEMINI_MODEL } from "../../config/gemini.js";
 
 const stripCodeFences = (content) =>
   content
@@ -46,7 +44,12 @@ const toSystemInstruction = (messages = []) => {
   };
 };
 
-const questionSchema = {
+/**
+ * Structured-output schema for question generation. Passing this to Gemini
+ * constrains decoding to the shape we parse, which removes the "valid JSON but
+ * wrong keys" failure mode that free-form prompting leaves open.
+ */
+export const questionSchema = {
   type: "object",
   properties: {
     questions: {
@@ -75,6 +78,32 @@ const questionSchema = {
     },
   },
   required: ["questions"],
+};
+
+/**
+ * Structured-output schema for one live interviewer turn.
+ *
+ * `action` is what the session loop branches on, so it is constrained rather
+ * than parsed out of prose: a turn that cannot be read as ask-or-close would
+ * leave the interview with no way to end itself.
+ */
+export const interviewTurnSchema = {
+  type: "object",
+  properties: {
+    action: { type: "string", enum: ["ask", "close"] },
+    question_text: { type: "string" },
+    question_type: {
+      type: "string",
+      enum: ["behavioral", "technical", "situational", "general"],
+    },
+    difficulty_level: {
+      type: "string",
+      enum: ["easy", "medium", "hard"],
+    },
+    ideal_answer_guidelines: { type: "string" },
+    closing_remark: { type: "string" },
+  },
+  required: ["action"],
 };
 
 /**

@@ -80,7 +80,7 @@ describe('Questions Module', () => {
       });
 
       expect(result).toEqual(mockInsertedData);
-      expect(generateQuestions).toHaveBeenCalledWith(mockJobData, { questionCount: 10 });
+      expect(generateQuestions).toHaveBeenCalledWith(mockJobData, { questionCount: 10, mode: null });
       expect(mockSupabase.from).toHaveBeenCalledWith('interview_questions');
       expect(mockSupabase.insert).toHaveBeenCalledWith(expect.arrayContaining([
         expect.objectContaining({ question_number: 1 })
