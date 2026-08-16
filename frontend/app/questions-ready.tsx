@@ -1,15 +1,23 @@
 import { ThemedText } from '@/components/themed-text'
 import { Colors } from '@/constants/theme'
 import { useColorScheme } from '@/hooks/use-color-scheme'
+import { useMode } from '@/hooks/mode-context'
+import { getPreparedSession } from '@/lib/prepared-session'
 import { Ionicons } from '@expo/vector-icons'
 import { LinearGradient } from 'expo-linear-gradient'
-import { router } from 'expo-router'
+import { router, useLocalSearchParams } from 'expo-router'
 import React from 'react'
 import { Pressable, StyleSheet, View } from 'react-native'
 
 export default function QuestionsReady() {
   const colorScheme = useColorScheme()
   const colors = Colors[colorScheme ?? 'light']
+  const { copy } = useMode()
+  const { sessionId } = useLocalSearchParams<{ sessionId: string }>()
+
+  const prepared = sessionId ? getPreparedSession(sessionId) : null
+  const maxQuestions = prepared?.maxQuestions ?? 15
+  const roleTitle = prepared?.jobDescription.title
 
   return (
     <View style={styles.root}>
@@ -18,12 +26,22 @@ export default function QuestionsReady() {
       <View style={[styles.sheet, { backgroundColor: colors.card }]}>
         <View style={[styles.handle, { backgroundColor: colors.border }]} />
 
-        <ThemedText style={[styles.title, { color: colors.oppositeColor }]}>Your Questions are Ready</ThemedText>
+        <ThemedText style={[styles.title, { color: colors.oppositeColor }]}>
+          Your {copy.sessionNoun} is Ready
+        </ThemedText>
+        {/* No question count to promise: the interviewer writes each question
+            from what you have just said, and stops when it has heard enough. */}
         <ThemedText style={[styles.sub, { color: colors.subtext }]}>
-          We&apos;ve analyzed the job description and generated 10 tailored questions to test your skills.
+          {roleTitle
+            ? `You'll be interviewed on ${roleTitle}. Questions come one at a time — up to ${maxQuestions} — and follow on from your answers.`
+            : `Questions come one at a time — up to ${maxQuestions} — and follow on from your answers.`}
         </ThemedText>
 
-        <Pressable style={styles.circleWrap} onPress={() => router.replace('/interview-session')}>
+        <Pressable
+          style={styles.circleWrap}
+          onPress={() => router.replace({ pathname: '/countdown', params: { sessionId } })}
+          disabled={!sessionId}
+        >
           <View style={styles.shadowHost}>
             <LinearGradient
               colors={[colors.tint, '#7A4CF0']}
@@ -32,7 +50,7 @@ export default function QuestionsReady() {
               style={styles.circle}
             >
               <Ionicons name="mic" size={40} color="#fff" />
-              <ThemedText style={styles.circleText}>START{'\n'}INTERVIEW</ThemedText>
+              <ThemedText style={styles.circleText}>START{'\n'}{copy.sessionNoun.toUpperCase()}</ThemedText>
             </LinearGradient>
           </View>
         </Pressable>

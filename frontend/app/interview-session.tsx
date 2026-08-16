@@ -1,97 +1,112 @@
-import React, { useEffect, useRef, useState } from 'react'
-import { StyleSheet, View, ScrollView, Image, Pressable } from 'react-native'
+import React, { useEffect, useState } from 'react'
+import { StyleSheet, View, ScrollView, Image, Pressable, TextInput, ActivityIndicator } from 'react-native'
 import { LinearGradient } from 'expo-linear-gradient'
 import { Ionicons } from '@expo/vector-icons'
-import { router } from 'expo-router'
+import { router, useLocalSearchParams } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
-import {
-  useAudioRecorder,
-  useAudioRecorderState,
-  RecordingPresets,
-  AudioModule,
-  setAudioModeAsync,
-} from 'expo-audio'
 import { ThemedText } from '@/components/themed-text'
 import { useColorScheme } from '@/hooks/use-color-scheme'
+import { useMode } from '@/hooks/mode-context'
+import { useInterviewer } from '@/hooks/interviewer-context'
+import { avatarSource, shortName } from '@/constants/interviewers'
 import { Colors } from '@/constants/theme'
+import { useInterviewSession } from '@/hooks/use-interview-session'
+import { clearPreparedSession, getPreparedSession } from '@/lib/prepared-session'
+import type { InterviewQuestion } from '@/types/interview'
 
-const BAR_COUNT = 12
+const pad = (n: number) => n.toString().padStart(2, '0')
 
-const RECORDER_OPTIONS = { ...RecordingPresets.LOW_QUALITY, isMeteringEnabled: true }
-
-function meteringToHeight(db: number) {
-  // expo-audio metering returns dBFS, typically -160 (silent) to 0 (peak).
-  const clamped = Math.max(-60, Math.min(0, db ?? -60))
-  const norm = (clamped + 60) / 60 // 0..1
-  return 6 + norm * 36 // 6..42 px
-}
-
-const AVATAR = 'https://i.pravatar.cc/100?img=12'
-const AI_AVATAR = 'https://i.pravatar.cc/200?img=47'
-
-function pad(n: number) {
-  return n.toString().padStart(2, '0')
+const TYPE_LABEL: Record<InterviewQuestion['type'], string> = {
+  behavioral: 'BEHAVIORAL QUESTION',
+  technical: 'TECHNICAL QUESTION',
+  situational: 'SITUATIONAL QUESTION',
+  general: 'GENERAL QUESTION',
 }
 
 export default function InterviewSession() {
   const colorScheme = useColorScheme()
   const colors = Colors[colorScheme ?? 'light']
-  const [seconds, setSeconds] = useState(332)
-  const [bars, setBars] = useState<number[]>(Array(BAR_COUNT).fill(8))
+  const { modeId, copy } = useMode()
+  const { interviewer } = useInterviewer()
+  const { sessionId } = useLocalSearchParams<{ sessionId: string }>()
 
-  const onMeter = useRef((status: any) => {
-    const m = status?.metering
-    if (typeof m === 'number') {
-      const next = meteringToHeight(m)
-      setBars((prev) => [...prev.slice(1), next])
-    }
-  }).current
-  const recorder = useAudioRecorder(RECORDER_OPTIONS, onMeter)
-  const recorderState = useAudioRecorderState(recorder, 100)
-  const startedRef = useRef(false)
+  if (!sessionId) {
+    return (
+      <SessionMessage
+        colors={colors}
+        message="This session is missing an id. Start a new one from Practice."
+        onBack={() => router.replace('/(tabs)/practice')}
+      />
+    )
+  }
+
+  return (
+    <RunningSession
+      sessionId={sessionId}
+      colors={colors}
+      copy={copy}
+      modeId={modeId}
+      interviewer={interviewer}
+    />
+  )
+}
+
+function RunningSession({
+  sessionId,
+  colors,
+  copy,
+  modeId,
+  interviewer,
+}: {
+  sessionId: string
+  colors: typeof Colors.light
+  copy: ReturnType<typeof useMode>['copy']
+  modeId: ReturnType<typeof useMode>['modeId']
+  interviewer: ReturnType<typeof useInterviewer>['interviewer']
+}) {
+  const [typed, setTyped] = useState('')
+
+  // Panelists take turns so a multi-voice panel actually sounds like one.
+  const panelist = interviewer.members[0]
+
+  // The setup screen leaves the session's question cap here; a session reopened
+  // without it falls back to the server's own ceiling.
+  const prepared = getPreparedSession(sessionId)
+
+  const session = useInterviewSession({
+    sessionId,
+    mode: modeId,
+    voice: panelist?.voiceId,
+    maxQuestions: prepared?.maxQuestions,
+    onFinished: () => {
+      clearPreparedSession()
+      // The history detail screen renders the real graded session; the results
+      // tab is still placeholder content.
+      router.replace({ pathname: '/history/[id]', params: { id: sessionId } })
+    },
+  })
+
+  const position = Math.max(1, session.askedCount)
+  const speaker = interviewer.members[(position - 1) % interviewer.members.length] ?? panelist
+  const mm = Math.floor(session.elapsedSeconds / 60)
+  const ss = session.elapsedSeconds % 60
+  const busy =
+    session.phase === 'submitting' ||
+    session.phase === 'thinking' ||
+    session.phase === 'finishing' ||
+    session.phase === 'grading'
 
   useEffect(() => {
-    const i = setInterval(() => setSeconds((s) => s + 1), 1000)
-    return () => clearInterval(i)
-  }, [])
-
-  useEffect(() => {
-    if (startedRef.current) return
-    startedRef.current = true
-    ;(async () => {
-      try {
-        const perm = await AudioModule.requestRecordingPermissionsAsync()
-        if (!perm.granted) return
-        await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true })
-        await recorder.prepareToRecordAsync()
-        recorder.record()
-      } catch {
-        /* mic unavailable; bars stay flat */
-      }
-    })()
-    return () => {
-      ;(async () => {
-        try {
-          await recorder.stop()
-        } catch {
-          /* noop */
-        }
-      })()
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
-
-  const mm = Math.floor(seconds / 60)
-  const ss = seconds % 60
+    setTyped('')
+  }, [session.question?.id])
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.card }} edges={['top']}>
       <View style={[styles.header, { backgroundColor: colors.card, borderBottomColor: colors.border }]}>
-        <Image source={{ uri: AVATAR }} style={styles.avatar} />
         <ThemedText style={[styles.brand, { color: colors.tint }]}>VoxPrep</ThemedText>
         <View style={{ flex: 1 }} />
-        <Pressable hitSlop={10}>
-          <Ionicons name="notifications-outline" size={22} color={colors.oppositeColor} />
+        <Pressable hitSlop={10} onPress={session.endEarly} disabled={session.phase === 'finishing' || session.phase === 'grading'}>
+          <ThemedText style={{ color: colors.subtext, fontWeight: '600' }}>End</ThemedText>
         </Pressable>
       </View>
 
@@ -99,24 +114,24 @@ export default function InterviewSession() {
         style={{ backgroundColor: colors.background }}
         contentContainerStyle={{ padding: 20, paddingBottom: 32 }}
         showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
       >
         <View style={styles.topRow}>
           <View style={[styles.timerPill, { backgroundColor: colors.card }]}>
-            <View style={styles.recDot} />
+            <View style={[styles.recDot, { opacity: session.phase === 'answering' ? 1 : 0.3 }]} />
             <ThemedText style={[styles.timerText, { color: colors.oppositeColor }]}>
               {pad(mm)}:{pad(ss)}
             </ThemedText>
           </View>
           <View style={[styles.qPill, { backgroundColor: colors.card }]}>
             <ThemedText style={[styles.qLabel, { color: colors.subtext }]}>QUESTION</ThemedText>
-            <ThemedText style={[styles.qVal, { color: colors.oppositeColor }]}>2 of 10</ThemedText>
+            {/* "up to" because the interviewer decides when it has heard
+                enough — the cap is a ceiling, not a target. */}
+            <ThemedText style={[styles.qVal, { color: colors.oppositeColor }]}>
+              {position} of up to {session.maxQuestions}
+            </ThemedText>
           </View>
         </View>
-
-        <Pressable style={[styles.replayBtn, { borderColor: colors.tint, backgroundColor: colors.card }]}>
-          <Ionicons name="refresh" size={16} color={colors.tint} />
-          <ThemedText style={{ color: colors.tint, fontWeight: '700' }}>Replay Question</ThemedText>
-        </Pressable>
 
         <View style={[styles.questionCard, { backgroundColor: colors.card }]}>
           <LinearGradient
@@ -128,105 +143,185 @@ export default function InterviewSession() {
 
           <View style={styles.questionInner}>
             <View style={[styles.tag, { backgroundColor: colors.brandSoft }]}>
-              <ThemedText style={[styles.tagText, { color: colors.tint }]}>BEHAVIORAL QUESTION</ThemedText>
+              <ThemedText style={[styles.tagText, { color: colors.tint }]}>
+                {session.question ? TYPE_LABEL[session.question.type] : copy.questionTag}
+              </ThemedText>
             </View>
 
             <ThemedText style={[styles.questionText, { color: colors.oppositeColor }]}>
-              &quot;Tell me about a time you had to handle a difficult situation with a colleague. How did you resolve it?&quot;
+              {session.question?.questionText ??
+                (session.phase === 'error'
+                  ? ''
+                  : `${speaker ? shortName(speaker) : 'The interviewer'} is preparing your first question...`)}
             </ThemedText>
-
-            <View style={[styles.player, { backgroundColor: colors.inputBg }]}>
-              <View style={styles.playerRow}>
-                <Pressable style={[styles.playBtn, { backgroundColor: colors.tint }]}>
-                  <Ionicons name="play" size={18} color="#fff" />
-                </Pressable>
-                <View style={{ flex: 1 }}>
-                  <View style={styles.playerLabels}>
-                    <ThemedText style={[styles.playerLabel, { color: colors.subtext }]}>AI Question Voice</ThemedText>
-                    <ThemedText style={[styles.playerTime, { color: colors.subtext }]}>0:12 / 0:18</ThemedText>
-                  </View>
-                  <View style={[styles.progressTrack, { backgroundColor: colors.border }]}>
-                    <View style={[styles.progressFill, { backgroundColor: colors.tint }]} />
-                  </View>
-                </View>
-              </View>
-
-              <View style={styles.waveform}>
-                {WAVE.map((h, i) => (
-                  <View
-                    key={i}
-                    style={{
-                      width: 3,
-                      height: h,
-                      borderRadius: 2,
-                      backgroundColor: i < 12 ? colors.tint : colors.border,
-                    }}
-                  />
-                ))}
-              </View>
-            </View>
-          </View>
-        </View>
-
-        <Pressable style={[styles.replayBtn, { borderColor: colors.tint, backgroundColor: colors.card, marginTop: 16 }]}>
-          <Ionicons name="refresh" size={16} color={colors.tint} />
-          <ThemedText style={{ color: colors.tint, fontWeight: '700' }}>Replay Question</ThemedText>
-        </Pressable>
-
-        <View style={[styles.aiCard, { backgroundColor: colors.card }]}>
-          <View style={styles.aiAvatarWrap}>
-            <Image source={{ uri: AI_AVATAR }} style={styles.aiAvatar} />
-            <View style={[styles.statusDot, { borderColor: colors.card }]} />
-          </View>
-          <ThemedText style={[styles.aiLabel, { color: colors.oppositeColor }]}>
-            {recorderState.isRecording ? 'AI Interviewer Listening...' : 'Microphone unavailable'}
-          </ThemedText>
-          <View style={styles.miniBars}>
-            {bars.map((h, i) => (
-              <View
-                key={i}
-                style={{ width: 3, height: h, borderRadius: 2, backgroundColor: colors.tint }}
-              />
-            ))}
           </View>
         </View>
 
         <Pressable
-          style={[styles.stopBtn, { backgroundColor: colors.tint }]}
-          onPress={async () => {
-            try {
-              await recorder.stop()
-            } catch {
-              /* noop */
-            }
-            router.replace('/(tabs)/results')
-          }}
+          style={[
+            styles.replayBtn,
+            {
+              borderColor: colors.tint,
+              backgroundColor: colors.card,
+              marginTop: 16,
+              opacity: session.canReplay ? 1 : 0.5,
+            },
+          ]}
+          onPress={session.replayQuestion}
+          disabled={!session.canReplay || session.isReplaying}
         >
-          <Ionicons name="checkmark-circle" size={18} color="#fff" />
-          <ThemedText style={styles.stopBtnText}>Stop &amp; Submit</ThemedText>
+          {session.isReplaying ? (
+            <ActivityIndicator size="small" color={colors.tint} />
+          ) : (
+            <Ionicons name="refresh" size={16} color={colors.tint} />
+          )}
+          <ThemedText style={{ color: colors.tint, fontWeight: '700' }}>
+            {session.isReplaying ? 'Loading...' : copy.replayLabel}
+          </ThemedText>
         </Pressable>
 
-        <View style={[styles.transcriptCard, { backgroundColor: colors.inputBg }]}>
-          <View style={styles.transcriptHeader}>
-            <Ionicons name="reorder-three" size={16} color={colors.subtext} />
-            <ThemedText style={[styles.transcriptLabel, { color: colors.subtext }]}>LIVE TRANSCRIPTION</ThemedText>
+        <View style={[styles.aiCard, { backgroundColor: colors.card }]}>
+          <View style={styles.aiAvatarWrap}>
+            {speaker ? <Image source={avatarSource(speaker)} style={styles.aiAvatar} /> : null}
+            <View
+              style={[
+                styles.statusDot,
+                { borderColor: colors.card, backgroundColor: session.phase === 'answering' ? '#22C55E' : '#F59E0B' },
+              ]}
+            />
           </View>
-          <ThemedText style={[styles.transcriptText, { color: colors.oppositeColor }]}>
-            &quot;In my previous role as a Senior Project Manager, I often had to balance multiple high-priority tasks simultaneously. One specific instance involved...&quot;
-            <ThemedText style={[styles.caret, { color: colors.tint }]}>|</ThemedText>
+
+          <ThemedText style={[styles.aiLabel, { color: colors.oppositeColor }]}>
+            {session.phase === 'thinking'
+              ? `${speaker ? shortName(speaker) : 'The interviewer'} is thinking about what to ask next...`
+              : session.phase === 'asking'
+                ? `${speaker ? shortName(speaker) : 'The interviewer'} is speaking...`
+                : session.phase === 'answering'
+                  ? session.micAvailable
+                    ? copy.listeningLabel
+                    : 'Microphone unavailable — type your answer'
+                  : session.phase === 'submitting'
+                    ? 'Transcribing your answer...'
+                    : session.phase === 'finishing'
+                      ? session.closingRemark ?? 'Wrapping up...'
+                      : session.phase === 'grading'
+                        ? 'Assessing the whole interview — this takes a moment...'
+                        : session.phase === 'error'
+                          ? 'The interview is paused.'
+                          : 'Getting ready...'}
           </ThemedText>
+
+          <View style={styles.miniBars}>
+            {session.bars.map((h, i) => (
+              <View key={i} style={{ width: 3, height: h, borderRadius: 2, backgroundColor: colors.tint }} />
+            ))}
+          </View>
         </View>
+
+        {session.error ? (
+          <View style={[styles.errorBox, { backgroundColor: colors.brandSoft }]}>
+            <Ionicons name="alert-circle" size={16} color="#EF4444" />
+            <ThemedText style={{ color: colors.oppositeColor, fontSize: 13, flex: 1 }}>{session.error}</ThemedText>
+          </View>
+        ) : null}
+
+        {session.phase === 'error' ? (
+          <>
+            <Pressable style={[styles.stopBtn, { backgroundColor: colors.tint }]} onPress={session.retry}>
+              <Ionicons name="refresh" size={18} color="#fff" />
+              <ThemedText style={styles.stopBtnText}>Try again</ThemedText>
+            </Pressable>
+            <Pressable
+              style={[styles.replayBtn, { borderColor: colors.border, backgroundColor: colors.card }]}
+              onPress={session.endEarly}
+            >
+              <ThemedText style={{ color: colors.subtext, fontWeight: '700' }}>
+                End here and see my results
+              </ThemedText>
+            </Pressable>
+          </>
+        ) : session.needsTypedAnswer && session.phase === 'answering' ? (
+          <View style={[styles.typedCard, { backgroundColor: colors.inputBg }]}>
+            <ThemedText style={[styles.transcriptLabel, { color: colors.subtext }]}>TYPE YOUR ANSWER</ThemedText>
+            <TextInput
+              multiline
+              value={typed}
+              onChangeText={setTyped}
+              placeholder="Type what you would have said..."
+              placeholderTextColor={colors.muted}
+              style={[styles.typedInput, { color: colors.oppositeColor }]}
+              textAlignVertical="top"
+            />
+            <Pressable
+              style={[styles.stopBtn, { backgroundColor: typed.trim() ? colors.tint : colors.border, marginBottom: 0 }]}
+              onPress={() => session.submitTypedAnswer(typed)}
+              disabled={!typed.trim() || busy}
+            >
+              <ThemedText style={styles.stopBtnText}>Submit Answer</ThemedText>
+            </Pressable>
+          </View>
+        ) : (
+          <Pressable
+            style={[styles.stopBtn, { backgroundColor: session.phase === 'answering' ? colors.tint : colors.border }]}
+            onPress={session.submitAnswer}
+            disabled={session.phase !== 'answering' || busy}
+          >
+            {busy ? (
+              <ActivityIndicator color="#fff" size="small" />
+            ) : (
+              <Ionicons name="checkmark-circle" size={18} color="#fff" />
+            )}
+            <ThemedText style={styles.stopBtnText}>
+              {busy ? 'Submitting...' : copy.submitLabel}
+            </ThemedText>
+          </Pressable>
+        )}
+
+        {session.transcript ? (
+          <View style={[styles.transcriptCard, { backgroundColor: colors.inputBg }]}>
+            <View style={styles.transcriptHeader}>
+              <Ionicons name="reorder-three" size={16} color={colors.subtext} />
+              <ThemedText style={[styles.transcriptLabel, { color: colors.subtext }]}>LAST ANSWER</ThemedText>
+            </View>
+            <ThemedText style={[styles.transcriptText, { color: colors.oppositeColor }]}>
+              {session.transcript}
+            </ThemedText>
+          </View>
+        ) : null}
       </ScrollView>
     </SafeAreaView>
   )
 }
 
-const WAVE = [14, 22, 30, 18, 26, 14, 30, 20, 24, 16, 28, 22, 14, 20, 16, 12, 18, 14, 22, 16, 12, 18, 14, 16, 20, 14, 10, 12, 10, 14, 12, 10]
+function SessionMessage({
+  colors,
+  message,
+  busy,
+  onBack,
+}: {
+  colors: typeof Colors.light
+  message: string
+  busy?: boolean
+  onBack?: () => void
+}) {
+  return (
+    <SafeAreaView style={[styles.messageRoot, { backgroundColor: colors.background }]}>
+      {busy ? <ActivityIndicator color={colors.tint} size="large" /> : null}
+      <ThemedText style={{ color: colors.oppositeColor, textAlign: 'center', marginTop: 16 }}>{message}</ThemedText>
+      {onBack ? (
+        <Pressable style={[styles.stopBtn, { backgroundColor: colors.tint, marginTop: 24, paddingHorizontal: 32 }]} onPress={onBack}>
+          <ThemedText style={styles.stopBtnText}>Back to Practice</ThemedText>
+        </Pressable>
+      ) : null}
+    </SafeAreaView>
+  )
+}
 
 const styles = StyleSheet.create({
   header: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20, paddingVertical: 12, borderBottomWidth: 1 },
-  avatar: { width: 36, height: 36, borderRadius: 18, marginRight: 10 },
   brand: { fontWeight: '700', fontSize: 17 },
+
+  messageRoot: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 32 },
 
   topRow: { flexDirection: 'row', justifyContent: 'space-between', gap: 12, marginBottom: 14 },
   timerPill: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 14, paddingVertical: 8, borderRadius: 10 },
@@ -246,28 +341,19 @@ const styles = StyleSheet.create({
   questionInner: { flex: 1, padding: 16 },
   tag: { alignSelf: 'flex-start', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 6, marginBottom: 12 },
   tagText: { fontSize: 11, fontWeight: '700', letterSpacing: 0.5 },
-  questionText: { fontSize: 15, lineHeight: 22, marginBottom: 16 },
-
-  player: { borderRadius: 12, padding: 14 },
-  playerRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  playBtn: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center' },
-  playerLabels: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 },
-  playerLabel: { fontSize: 12, fontWeight: '600' },
-  playerTime: { fontSize: 12 },
-  progressTrack: { height: 3, borderRadius: 2, overflow: 'hidden' },
-  progressFill: { width: '40%', height: '100%' },
-  waveform: { flexDirection: 'row', alignItems: 'center', gap: 3, marginTop: 14, paddingLeft: 52 },
+  questionText: { fontSize: 16, lineHeight: 24 },
 
   aiCard: { borderRadius: 14, padding: 22, alignItems: 'center', marginTop: 16, marginBottom: 16 },
   aiAvatarWrap: { width: 110, height: 110, marginBottom: 12 },
   aiAvatar: { width: 110, height: 110, borderRadius: 55 },
   statusDot: {
     position: 'absolute', right: 4, bottom: 4,
-    width: 18, height: 18, borderRadius: 9,
-    backgroundColor: '#22C55E', borderWidth: 3,
+    width: 18, height: 18, borderRadius: 9, borderWidth: 3,
   },
-  aiLabel: { fontWeight: '600', fontSize: 14, marginBottom: 8 },
-  miniBars: { flexDirection: 'row', alignItems: 'center', gap: 3 },
+  aiLabel: { fontWeight: '600', fontSize: 14, marginBottom: 8, textAlign: 'center' },
+  miniBars: { flexDirection: 'row', alignItems: 'center', gap: 3, height: 42 },
+
+  errorBox: { flexDirection: 'row', alignItems: 'center', gap: 8, padding: 12, borderRadius: 10, marginBottom: 14 },
 
   stopBtn: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
@@ -275,9 +361,11 @@ const styles = StyleSheet.create({
   },
   stopBtnText: { color: '#fff', fontWeight: '700', fontSize: 15 },
 
+  typedCard: { borderRadius: 12, padding: 16, marginBottom: 16, gap: 10 },
+  typedInput: { minHeight: 110, fontSize: 14, lineHeight: 20 },
+
   transcriptCard: { borderRadius: 12, padding: 16 },
   transcriptHeader: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 10 },
   transcriptLabel: { fontSize: 11, fontWeight: '700', letterSpacing: 0.5 },
   transcriptText: { fontSize: 14, lineHeight: 22 },
-  caret: { fontWeight: '700' },
 })

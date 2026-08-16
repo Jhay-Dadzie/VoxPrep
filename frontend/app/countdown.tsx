@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { StyleSheet, View, Animated, Easing } from 'react-native'
-import { router } from 'expo-router'
+import { router, useLocalSearchParams } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { ThemedText } from '@/components/themed-text'
 import { useColorScheme } from '@/hooks/use-color-scheme'
@@ -9,12 +9,13 @@ import { Colors } from '@/constants/theme'
 export default function Countdown() {
   const colorScheme = useColorScheme()
   const colors = Colors[colorScheme ?? 'light']
+  const { sessionId } = useLocalSearchParams<{ sessionId: string }>()
   const [count, setCount] = useState(3)
   const scale = useRef(new Animated.Value(1)).current
 
   useEffect(() => {
     if (count === 0) {
-      router.replace('/questions-ready')
+      router.replace({ pathname: '/interview-session', params: { sessionId } })
       return
     }
     scale.setValue(0.6)
@@ -26,7 +27,7 @@ export default function Countdown() {
     }).start()
     const t = setTimeout(() => setCount((c) => c - 1), 1000)
     return () => clearTimeout(t)
-  }, [count, scale])
+  }, [count, scale, sessionId])
 
   return (
     <SafeAreaView style={[styles.root, { backgroundColor: colors.background }]}>

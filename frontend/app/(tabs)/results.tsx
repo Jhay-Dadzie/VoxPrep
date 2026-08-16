@@ -133,7 +133,9 @@ export default function Results() {
                 </Pressable>
                 <Pressable
                   style={[styles.btnOutline, { borderColor: colors.tint }]}
-                  onPress={() => router.replace('/interview-session')}
+                  // A retake is a new session: a completed one already holds
+                  // answers and the API rejects further submissions to it.
+                  onPress={() => router.replace('/(tabs)/practice')}
                 >
                   <ThemedText style={[styles.btnOutlineText, { color: colors.tint }]}>Retake Session</ThemedText>
                 </Pressable>

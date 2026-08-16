@@ -1,4 +1,4 @@
-import axios, { AxiosInstance, AxiosError, InternalAxiosRequestConfig } from 'axios'
+import axios, { AxiosInstance, AxiosError, InternalAxiosRequestConfig, isAxiosError } from 'axios'
 import Constants from 'expo-constants'
 import { clearTokens, getAccessToken, getRefreshToken, setSessionTokens } from './token-storage'
 import { emitSessionExpired } from './session-events'
@@ -104,6 +104,16 @@ apiClient.interceptors.request.use(
     if (token) {
       config.headers.Authorization = `Bearer ${token}`
     }
+
+    // The instance defaults to application/json, which would mislabel a file
+    // upload. Deleting the header lets React Native's networking layer write
+    // the multipart type together with the boundary it generates - setting
+    // "multipart/form-data" by hand produces a boundary-less header that
+    // multer rejects.
+    if (typeof FormData !== 'undefined' && config.data instanceof FormData) {
+      delete config.headers['Content-Type']
+    }
+
     return config
   },
   (error) => Promise.reject(error)
@@ -158,8 +168,8 @@ apiClient.interceptors.response.use(
         // Only a rejected refresh token means the session is over. A network
         // failure here is transient, and wiping the tokens would sign the user
         // out for being briefly offline.
-        const refreshStatus = axios.isAxiosError(err) ? err.response?.status : undefined
-        if (!axios.isAxiosError(err) || (refreshStatus && refreshStatus !== 429 && refreshStatus < 500)) {
+        const refreshStatus = isAxiosError(err) ? err.response?.status : undefined
+        if (!isAxiosError(err) || (refreshStatus && refreshStatus !== 429 && refreshStatus < 500)) {
           await clearTokens().catch(() => {})
           emitSessionExpired()
         }

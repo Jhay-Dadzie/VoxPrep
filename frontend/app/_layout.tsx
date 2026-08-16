@@ -18,14 +18,19 @@ function RootLayoutInner() {
   useEffect(() => {
     if (isInitializing) return
 
-    // Auth screens and the two setup screens manage their own navigation.
-    // Do not redirect them while the user is completing setup.
+    // Screens that manage their own navigation. The interview flow is in here
+    // because it runs outside the tab group: without the exemption the redirect
+    // below would pull the user back to the dashboard the moment a session
+    // started.
     if (
       segments[0] === '(authScreens)' ||
       segments[0] === 'mode-select' ||
       segments[0] === 'select-interviewer' ||
       segments[0] === 'settings' ||
-      segments[0] === 'history'
+      segments[0] === 'history' ||
+      segments[0] === 'countdown' ||
+      segments[0] === 'questions-ready' ||
+      segments[0] === 'interview-session'
     ) return
 
     if (!isSignedIn) {

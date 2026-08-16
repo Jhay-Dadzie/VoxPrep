@@ -16,6 +16,8 @@ import { ThemedText } from '@/components/themed-text'
 import { useColorScheme } from '@/hooks/use-color-scheme'
 import { Colors } from '@/constants/theme'
 import { historyService } from '@/services/history'
+import { interviewService } from '@/services/interview'
+import { setPreparedSession } from '@/lib/prepared-session'
 import { toAuthError } from '@/services/error-handler'
 import { HistoryDetail, HistoryQuestion } from '@/types/history'
 import {
@@ -52,6 +54,7 @@ export default function HistoryDetailScreen() {
   const [notes, setNotes] = useState('')
   const [isSavingNotes, setIsSavingNotes] = useState(false)
   const [notesSaved, setNotesSaved] = useState(false)
+  const [isRetaking, setIsRetaking] = useState(false)
   const isMountedRef = useRef(true)
 
   useEffect(() => {
@@ -114,6 +117,31 @@ export default function HistoryDetailScreen() {
       { label: 'Completeness', value: average((scores) => scores.completeness), color: colors.warning },
     ].filter((metric) => metric.value != null)
   }, [session, colors])
+
+  /**
+   * Run this interview again.
+   *
+   * The finished session cannot be reopened, so the server starts a new one on
+   * the same source material and the user goes straight into it — no going back
+   * to the setup screen to paste the job description a second time.
+   */
+  const retake = async () => {
+    if (!id || isRetaking) return
+
+    setIsRetaking(true)
+    setError(null)
+    try {
+      const prepared = await interviewService.retake(id)
+      if (!isMountedRef.current) return
+
+      setPreparedSession(prepared)
+      router.push({ pathname: '/countdown', params: { sessionId: prepared.session.id } })
+    } catch (err) {
+      if (isMountedRef.current) setError(toAuthError(err).message)
+    } finally {
+      if (isMountedRef.current) setIsRetaking(false)
+    }
+  }
 
   const saveNotes = async () => {
     if (!id) return
@@ -300,11 +328,13 @@ export default function HistoryDetailScreen() {
 
             <View style={styles.actionsRow}>
               <Pressable
-                style={[styles.btnOutline, { borderColor: colors.tint }]}
-                onPress={() => router.push('/interview-session')}
+                style={[styles.btnOutline, { borderColor: colors.tint, opacity: isRetaking ? 0.6 : 1 }]}
+                onPress={retake}
+                disabled={isRetaking}
               >
+                {isRetaking ? <ActivityIndicator size="small" color={colors.tint} /> : null}
                 <ThemedText style={[styles.btnOutlineText, { color: colors.tint }]}>
-                  Retake Session
+                  {isRetaking ? 'Starting...' : 'Retake Session'}
                 </ThemedText>
               </Pressable>
             </View>
@@ -673,7 +703,10 @@ const styles = StyleSheet.create({
   statLabel: { fontSize: 11 },
 
   actionsRow: { flexDirection: 'row', gap: 12, marginTop: 16 },
-  btnOutline: { flex: 1, borderRadius: 999, paddingVertical: 12, alignItems: 'center', borderWidth: 1 },
+  btnOutline: {
+    flex: 1, borderRadius: 999, paddingVertical: 12, borderWidth: 1,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+  },
   btnOutlineText: { fontWeight: '700' },
 
   card: { borderRadius: 14, padding: 16, marginBottom: 16 },
