@@ -15,8 +15,8 @@ import {
 
 /**
  * POST /feedback/sessions/:sessionId/generate?force=false
- * Batch-grades every ungraded/failed response in the session. Requires all
- * questions to already be answered (enforced in the service layer).
+ * Grades every ungraded/failed response in the session in a single model call.
+ * Requires at least one answer to exist (enforced in the service layer).
  */
 export const generateSessionFeedback = asyncHandler(async (req, res, next) => {
   const { error: paramError, value: params } = sessionIdParamValidation.validate(req.params);

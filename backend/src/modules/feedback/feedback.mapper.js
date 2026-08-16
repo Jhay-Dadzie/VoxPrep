@@ -102,6 +102,9 @@ function toGenerateSummaryResponse(result) {
     generated: result.generated,
     failed: result.failed,
     skipped: result.skipped,
+    // Written by the session-wide grader: how the interview went as a whole,
+    // which no single response's feedback can say. Null on a skipped run.
+    session_summary: result.session_summary ?? null,
     feedback: toFeedbackListResponse(result.feedback),
   };
 }

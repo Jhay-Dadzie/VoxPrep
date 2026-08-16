@@ -10,47 +10,34 @@
  *  - Check-then-write upsert instead of Supabase's native .upsert(), same
  *    rationale as user.service.js / responses module: portability over
  *    convenience.
- *  - Feedback is graded per SESSION, not per response, once every question
- *    has been answered (product decision) — this lets the model see a
- *    complete, stable session rather than grading answers one at a time.
- *  - A single response's AI/parsing failure is isolated (stored as a
- *    'failed' row) so it can never take down the rest of a session's batch.
+ *  - Feedback is graded per SESSION, not per response, once the interview is
+ *    over (product decision) — this lets the model see a complete, stable
+ *    conversation rather than grading answers one at a time. In a
+ *    semi-structured interview that is not a nicety: most questions are
+ *    follow-ups, so an answer read in isolation is missing its own context.
+ *  - The whole session is one model call, on a model reserved for grading.
+ *    See session.assessor.js for the rate-limit reasoning.
+ *  - A response the model failed to grade is isolated (stored as a 'failed'
+ *    row) so it can never take down the rest of the session's results.
  */
 
 import { getSupabaseAdminClient } from '../../config/supabase.js';
 import { generateFeedback } from './feedback.generator.js';
+import { assessSession } from './session.assessor.js';
 import { normalizeFeedback, computeSessionAggregate } from './scoring.engine.js';
+import { hasRealAnswer } from '../../core/utils/helpers.js';
 import { AppError } from '../../core/errors/appError.js';
 import { error as _error, info } from '../../core/errors/logger.js';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const FEEDBACK_TABLE = 'feedback';
-// Caps parallel AI calls per session run — keeps within rate limits and
-// bounds cost/latency blast radius if something goes wrong mid-batch.
-const BATCH_CONCURRENCY = 3;
 
 let supabase;
 const getSupabase = () => {
   if (!supabase) supabase = getSupabaseAdminClient();
   return supabase;
 };
-
-// ─── Internal helpers ────────────────────────────────────────────────────────
-
-/**
- * Run `worker` over `items` with bounded concurrency. Uses Promise.allSettled
- * per batch so one item's rejection never aborts sibling items already in flight.
- */
-async function runInBatches(items, worker, concurrency = BATCH_CONCURRENCY) {
-  const results = [];
-  for (let i = 0; i < items.length; i += concurrency) {
-    const batch = items.slice(i, i + concurrency);
-    const batchResults = await Promise.allSettled(batch.map(worker));
-    results.push(...batchResults);
-  }
-  return results;
-}
 
 function parseStoredMetadata(value) {
   if (typeof value !== 'string' || !value.trim()) return null;
@@ -159,8 +146,8 @@ async function fetchGradableResponses(sessionId, force) {
   const { data: responses, error } = await supabase
     .from('user_responses')
     .select(
-      `id, question_id, session_id, user_id, transcribed_text,
-       interview_questions ( id, question_text, question_type, difficulty_level, ideal_answer_guidelines )`
+      `id, question_id, session_id, user_id, transcribed_text, response_created_at,
+       interview_questions ( id, question_number, question_text, question_type, difficulty_level, ideal_answer_guidelines )`
     )
     .eq('session_id', sessionId);
 
@@ -178,13 +165,19 @@ async function fetchGradableResponses(sessionId, force) {
     (existingFeedback || []).map((f) => [f.response_id, hydrateStoredFeedbackRow(f)])
   );
 
-  return (responses || []).filter((r) => {
-    if (!r.transcribed_text || !r.transcribed_text.trim()) return false; // nothing to grade
-    const existing = feedbackByResponse.get(r.id);
-    if (!existing) return true;
-    if (force) return true;
-    return existing.generation_status === 'failed';
-  });
+  return (responses || [])
+    .filter((r) => {
+      // Nothing to grade — including a row still holding the pre-transcription
+      // placeholder, which would otherwise be graded as if it were an answer.
+      if (!hasRealAnswer(r.transcribed_text)) return false;
+      const existing = feedbackByResponse.get(r.id);
+      if (!existing) return true;
+      if (force) return true;
+      return existing.generation_status === 'failed';
+    })
+    // Interview order, so the grader reads the conversation as it happened and
+    // a follow-up lands after the answer it follows up on.
+    .sort((a, b) => (a.interview_questions?.question_number ?? 0) - (b.interview_questions?.question_number ?? 0));
 }
 
 /**
@@ -217,6 +210,52 @@ async function upsertFeedbackRow(payload) {
   return data;
 }
 
+/** Zero-scored payload used when a response could not be graded at all. */
+const EMPTY_NORMALIZED = {
+  relevance_score: 0,
+  completeness_score: 0,
+  technical_accuracy_score: 0,
+  clarity_score: 0,
+  confidence_score: 0,
+  overall_score: 0,
+  strengths: [],
+  improvements: [],
+  summary: '',
+};
+
+const basePayloadFor = (response) => ({
+  response_id: response.id,
+  session_id: response.session_id,
+  question_id: response.question_id,
+});
+
+/**
+ * Persist one graded answer from a session-wide assessment.
+ *
+ * A null entry means the model returned nothing for this answer while grading
+ * the others successfully. That is stored as a failed row rather than dropped,
+ * so the results screen shows an ungraded answer instead of silently omitting
+ * one the candidate gave.
+ */
+async function storeAssessedResponse(response, entry, model) {
+  let payload;
+
+  try {
+    if (!entry) throw new Error('The assessment did not cover this answer');
+    payload = buildPersistedPayload(basePayloadFor(response), normalizeFeedback(entry), model);
+  } catch (err) {
+    payload = buildPersistedPayload(
+      basePayloadFor(response),
+      EMPTY_NORMALIZED,
+      model,
+      (err.message || 'Unusable assessment entry').slice(0, 500)
+    );
+  }
+
+  const persisted = await upsertFeedbackRow(payload);
+  return hydrateStoredFeedbackRow(persisted);
+}
+
 /**
  * Generate + persist feedback for exactly one response. Never throws on
  * AI/parsing failure — instead persists a 'failed' row with an error_message
@@ -245,7 +284,6 @@ async function generateAndStoreFeedbackForResponse(response, jobContext) {
       jobContent: jobContext?.job_content,
     });
 
-    console.log('RAW AI RESPONSE:', JSON.stringify(raw, null, 2));
     const normalized = normalizeFeedback(raw);
     const persisted = await upsertFeedbackRow(buildPersistedPayload(basePayload, normalized, model));
 
@@ -304,10 +342,17 @@ async function updateSessionOverallScore(sessionId) {
 // ─── Public service API ────────────────────────────────────────────────────────
 
 /**
- * Batch-generate feedback for every gradable response in a session.
+ * Grade every answered question in a session.
  *
- * Guard: only runs once questions_answered >= total_questions — feedback is
- * graded as a whole once the interview is finished, not per-answer.
+ * Guard: at least one answer must exist. It deliberately does NOT require every
+ * question to be answered — a semi-structured interview ends when the
+ * interviewer closes or the candidate stops, so the last question is routinely
+ * asked and never answered, and refusing to grade a session for that reason
+ * would cost the candidate the results for everything they did answer.
+ *
+ * The whole session is graded in one model call. If that call fails, every
+ * response is marked failed rather than left ungraded, so `force` can retry
+ * them all later.
  *
  * @param {string} sessionId
  * @param {string} userId
@@ -320,11 +365,8 @@ async function generateSessionFeedback(sessionId, userId, { force = false } = {}
     throw new AppError('Session has no questions to grade', 400);
   }
 
-  if (session.questions_answered < session.total_questions) {
-    throw new AppError(
-      `All questions must be answered before feedback can be generated (${session.questions_answered}/${session.total_questions} answered)`,
-      400
-    );
+  if (session.questions_answered === 0) {
+    throw new AppError('This session has no answers to grade', 400);
   }
 
   const gradable = await fetchGradableResponses(sessionId, force);
@@ -336,8 +378,37 @@ async function generateSessionFeedback(sessionId, userId, { force = false } = {}
 
   const jobContext = await fetchJobContext(session.job_description_id, userId);
 
-  const settled = await runInBatches(gradable, (response) =>
-    generateAndStoreFeedbackForResponse(response, jobContext)
+  let assessment = null;
+  let assessmentError = null;
+
+  try {
+    assessment = await assessSession({
+      answers: gradable.map((response) => ({
+        questionText: response.interview_questions?.question_text,
+        questionType: response.interview_questions?.question_type,
+        difficultyLevel: response.interview_questions?.difficulty_level,
+        idealAnswerGuidelines: response.interview_questions?.ideal_answer_guidelines,
+        answerText: response.transcribed_text,
+      })),
+      jobTitle: jobContext?.title,
+      companyName: jobContext?.company_name,
+      industry: jobContext?.industry,
+      experienceLevel: jobContext?.required_experience_level,
+      jobContent: jobContext?.job_content,
+    });
+  } catch (err) {
+    _error(`Session assessment failed for session ${sessionId}:`, err);
+    assessmentError = (err.message || 'Unknown error').slice(0, 500);
+  }
+
+  const settled = await Promise.allSettled(
+    gradable.map((response, index) =>
+      assessment
+        ? storeAssessedResponse(response, assessment.raw[index], assessment.model)
+        : upsertFeedbackRow(
+            buildPersistedPayload(basePayloadFor(response), EMPTY_NORMALIZED, null, assessmentError)
+          ).then(hydrateStoredFeedbackRow)
+    )
   );
 
   const feedback = settled.filter((r) => r.status === 'fulfilled').map((r) => r.value);
@@ -346,9 +417,18 @@ async function generateSessionFeedback(sessionId, userId, { force = false } = {}
 
   await updateSessionOverallScore(sessionId);
 
-  info(`Session ${sessionId}: generated ${generated} feedback rows, ${failed} failed`);
+  info(
+    `Session ${sessionId}: graded ${generated} responses, ${failed} failed ` +
+    `(1 call to ${assessment?.model ?? 'assessment model'})`
+  );
 
-  return { generated, failed, skipped: false, feedback };
+  return {
+    generated,
+    failed,
+    skipped: false,
+    feedback,
+    session_summary: assessment?.sessionSummary ?? null,
+  };
 }
 
 async function getFeedbackByResponseId(responseId, userId) {

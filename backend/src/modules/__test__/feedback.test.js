@@ -179,18 +179,33 @@ jest.mock('../feedback/feedback.generator.js', () => ({
   generateFeedback: jest.fn(),
 }));
 
+jest.mock('../feedback/session.assessor.js', () => ({
+  __esModule: true,
+  assessSession: jest.fn(),
+}));
+
 let getSupabaseAdminClient;
 let generateFeedback;
+let assessSession;
 let feedbackService;
 
 beforeAll(async () => {
   ({ getSupabaseAdminClient } = await import('../../config/supabase.js'));
   ({ generateFeedback } = await import('../feedback/feedback.generator.js'));
+  ({ assessSession } = await import('../feedback/session.assessor.js'));
   ({ default: feedbackService } = await import('../feedback/feedback.service.js'));
 });
 
+/**
+ * Chainable Supabase stand-in. Calls that end in single()/maybeSingle() are
+ * stubbed directly; calls awaited on the chain itself (`await from().select()
+ * .eq()`) take the next entry from `queued`.
+ */
 function buildMockSupabase() {
+  const queued = [];
+
   const mock = {
+    queue: (result) => queued.push(result),
     from: jest.fn().mockReturnThis(),
     select: jest.fn().mockReturnThis(),
     insert: jest.fn().mockReturnThis(),
@@ -200,7 +215,16 @@ function buildMockSupabase() {
     order: jest.fn().mockReturnThis(),
     single: jest.fn(),
     maybeSingle: jest.fn(),
+    then: (onFulfilled) => {
+      const result = queued.shift() ?? { data: [], error: null };
+      return Promise.resolve(onFulfilled ? onFulfilled(result) : result);
+    },
   };
+
+  mock.reset = () => {
+    queued.length = 0;
+  };
+
   return mock;
 }
 
@@ -209,13 +233,43 @@ describe('feedback.service', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    mockSupabase.reset();
     getSupabaseAdminClient.mockReturnValue(mockSupabase);
   });
 
+  const response = (id, questionNumber, text) => ({
+    id,
+    question_id: `q-${id}`,
+    session_id: 'sess-1',
+    user_id: 'user-1',
+    transcribed_text: text,
+    interview_questions: {
+      id: `q-${id}`,
+      question_number: questionNumber,
+      question_text: `Question ${questionNumber}?`,
+      question_type: 'behavioral',
+      difficulty_level: 'medium',
+      ideal_answer_guidelines: null,
+    },
+  });
+
+  const gradeFor = (index) => ({
+    index,
+    relevance_score: 80,
+    completeness_score: 70,
+    technical_accuracy_score: 75,
+    clarity_score: 85,
+    confidence_score: 60,
+    overall_score: 74,
+    strengths: ['Concrete example'],
+    improvements: ['Quantify the impact'],
+    summary: 'Solid answer.',
+  });
+
   describe('generateSessionFeedback', () => {
-    it('throws 400 when not all questions are answered yet', async () => {
+    it('throws 400 when the session has no answers at all', async () => {
       mockSupabase.single.mockResolvedValueOnce({
-        data: { id: 'sess-1', user_id: 'user-1', total_questions: 3, questions_answered: 1 },
+        data: { id: 'sess-1', user_id: 'user-1', total_questions: 3, questions_answered: 0 },
         error: null,
       });
 
@@ -223,7 +277,7 @@ describe('feedback.service', () => {
         feedbackService.generateSessionFeedback('sess-1', 'user-1')
       ).rejects.toMatchObject({ statusCode: 400 });
 
-      expect(generateFeedback).not.toHaveBeenCalled();
+      expect(assessSession).not.toHaveBeenCalled();
     });
 
     it('throws 404 when the session does not belong to the user', async () => {
@@ -232,6 +286,116 @@ describe('feedback.service', () => {
       await expect(
         feedbackService.generateSessionFeedback('sess-1', 'user-1')
       ).rejects.toMatchObject({ statusCode: 404 });
+    });
+
+    /**
+     * A semi-structured interview routinely ends on an unanswered question —
+     * the interviewer asks, the candidate stops. Refusing to grade for that
+     * reason would cost them the results for everything they did answer.
+     */
+    it('grades a session where the last question went unanswered', async () => {
+      mockSupabase.single.mockResolvedValueOnce({
+        data: {
+          id: 'sess-1',
+          user_id: 'user-1',
+          total_questions: 3,
+          questions_answered: 2,
+          job_description_id: null,
+        },
+        error: null,
+      });
+
+      // fetchGradableResponses: the responses, then their existing feedback
+      mockSupabase.queue({ data: [response('r2', 2, 'Second answer.'), response('r1', 1, 'First answer.')], error: null });
+      mockSupabase.queue({ data: [], error: null });
+
+      assessSession.mockResolvedValue({
+        raw: [gradeFor(0), gradeFor(1)],
+        sessionSummary: 'A steady interview.',
+        model: 'assessment-model',
+        processingTimeMs: 10,
+      });
+
+      // upsertFeedbackRow: no existing row, then the insert result
+      mockSupabase.maybeSingle.mockResolvedValue({ data: null, error: null });
+      mockSupabase.single.mockResolvedValue({ data: { id: 'fb-1', overall_response_score: 74 }, error: null });
+
+      const result = await feedbackService.generateSessionFeedback('sess-1', 'user-1');
+
+      expect(result.generated).toBe(2);
+      expect(result.failed).toBe(0);
+      expect(result.session_summary).toBe('A steady interview.');
+    });
+
+    it('grades the whole session in a single call, in interview order', async () => {
+      mockSupabase.single.mockResolvedValueOnce({
+        data: {
+          id: 'sess-1',
+          user_id: 'user-1',
+          total_questions: 2,
+          questions_answered: 2,
+          job_description_id: null,
+        },
+        error: null,
+      });
+
+      // Deliberately out of order — the service sorts by question number so the
+      // grader reads follow-ups after what they follow up on.
+      mockSupabase.queue({ data: [response('r2', 2, 'Second answer.'), response('r1', 1, 'First answer.')], error: null });
+      mockSupabase.queue({ data: [], error: null });
+
+      assessSession.mockResolvedValue({
+        raw: [gradeFor(0), gradeFor(1)],
+        sessionSummary: null,
+        model: 'assessment-model',
+        processingTimeMs: 10,
+      });
+
+      mockSupabase.maybeSingle.mockResolvedValue({ data: null, error: null });
+      mockSupabase.single.mockResolvedValue({ data: { id: 'fb-1' }, error: null });
+
+      await feedbackService.generateSessionFeedback('sess-1', 'user-1');
+
+      expect(assessSession).toHaveBeenCalledTimes(1);
+      expect(assessSession).toHaveBeenCalledWith(
+        expect.objectContaining({
+          answers: [
+            expect.objectContaining({ answerText: 'First answer.' }),
+            expect.objectContaining({ answerText: 'Second answer.' }),
+          ],
+        })
+      );
+      // The per-response generator is the regrade path, not this one.
+      expect(generateFeedback).not.toHaveBeenCalled();
+    });
+
+    it('marks every response failed when the assessment call itself fails', async () => {
+      mockSupabase.single.mockResolvedValueOnce({
+        data: {
+          id: 'sess-1',
+          user_id: 'user-1',
+          total_questions: 2,
+          questions_answered: 2,
+          job_description_id: null,
+        },
+        error: null,
+      });
+
+      mockSupabase.queue({ data: [response('r1', 1, 'First answer.')], error: null });
+      mockSupabase.queue({ data: [], error: null });
+
+      assessSession.mockRejectedValue(new Error('rate limited'));
+
+      mockSupabase.maybeSingle.mockResolvedValue({ data: null, error: null });
+      mockSupabase.single.mockResolvedValue({
+        data: { id: 'fb-1', suggestions: JSON.stringify({ error_message: 'rate limited' }) },
+        error: null,
+      });
+
+      const result = await feedbackService.generateSessionFeedback('sess-1', 'user-1');
+
+      expect(result.generated).toBe(0);
+      expect(result.failed).toBe(1);
     });
   });
 });
