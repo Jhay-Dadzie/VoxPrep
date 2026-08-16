@@ -3,6 +3,23 @@
  *
  * Powered by Deepgram Nova-2 — the highest accuracy English model.
  *
+ * ── Why not Gemini ───────────────────────────────────────────────────────────
+ *
+ * Transcription briefly ran on Gemini audio understanding. It does not work:
+ * the audio-capable Flash-Lite tier answers 404 "no longer available to new
+ * users" on current keys, which is why answers were being stored to the bucket
+ * and never transcribed. Deepgram also returns two things Gemini does not —
+ * a confidence score and the measured duration — both of which are columns on
+ * user_responses and inputs to grading.
+ *
+ * ── SDK shape ────────────────────────────────────────────────────────────────
+ *
+ * @deepgram/sdk v5 dropped the v3-era `listen.prerecorded.*` namespace in
+ * favour of `listen.v1.media.*`, and awaiting the call yields the parsed body
+ * directly rather than a `{ data, error }` envelope. Both are handled here, and
+ * both are asserted in the tests, because reaching for the old shape is exactly
+ * how this broke: it fails at call time, not at import time.
+ *
  * Design decisions:
  *  - Singleton class (matches user.service.js / auth.service.js pattern)
  *  - All public methods are async and throw on failure — controller handles 4xx/5xx
@@ -43,7 +60,7 @@ class STTService {
    * Transcribe audio from a Node.js Buffer (multipart file upload).
    *
    * @param {Buffer} buffer    - Raw audio bytes
-   * @param {string} mimetype  - Audio MIME type, e.g. 'audio/webm', 'audio/mp3'
+   * @param {string} mimetype  - Audio MIME type, e.g. 'audio/m4a', 'audio/wav'
    * @param {object} [options] - Deepgram option overrides (language, diarize, etc.)
    * @returns {Promise<TranscriptionResult>}
    */
@@ -52,28 +69,24 @@ class STTService {
       throw new Error('A non-empty audio buffer is required');
     }
 
-    const deepgram = getDeepgramClient();
+    const media = this._getMediaApi();
+    const transcribeFn = media.transcribeFile ?? media.transcribe_file;
 
-    // Support both older test-friendly shape (listen.prerecorded)
-    // and the current SDK shape (listen.v1.media)
-    const mediaApi = deepgram?.listen?.prerecorded ?? deepgram?.listen?.v1?.media;
-
-    if (!mediaApi || (typeof mediaApi.transcribeFile !== 'function' && typeof mediaApi.transcribe_file !== 'function')) {
-      _error('Deepgram client initialization failed or SDK version mismatch. Expected prerecorded transcription API (listen.prerecorded or listen.v1.media)');
+    if (typeof transcribeFn !== 'function') {
+      _error('Deepgram SDK exposes no file transcription method on listen.v1.media');
       throw new Error('Transcription service is currently unavailable (Internal Configuration Error)');
     }
 
     const opts = { ...DEFAULT_STT_OPTIONS, ...options };
 
     try {
-      const transcribeFn = mediaApi.transcribeFile ?? mediaApi.transcribe_file;
       const uploadable = {
         data: buffer,
         contentType: mimetype,
         filename: this._guessFilename(mimetype),
       };
 
-      const response = await transcribeFn.call(mediaApi, uploadable, opts);
+      const response = await transcribeFn.call(media, uploadable, opts);
       const { payload, error } = this._normalizeDeepgramResponse(response);
 
       if (error) {
@@ -85,8 +98,8 @@ class STTService {
       info(`STT buffer transcribed — ${shaped.transcript.length} chars, confidence ${shaped.confidence.toFixed(2)}`);
       return shaped;
     } catch (err) {
-      _error('STTService.transcribeBuffer error:', err);
-      throw err instanceof Error ? err : new Error(String(err));
+      _error('STTService.transcribeBuffer error:', err?.body ?? err?.message ?? err);
+      throw this._toSurfacedError(err);
     }
   }
 
@@ -103,56 +116,18 @@ class STTService {
       throw new Error('A valid audio URL is required');
     }
 
-    const deepgram = getDeepgramClient();
+    const media = this._getMediaApi();
+    const transcribeUrlFn = media.transcribeUrl ?? media.transcribe_url;
 
-    // Support both older test-friendly shape (listen.prerecorded)
-    // and the current SDK shape (listen.v1.media)
-    const mediaApi = deepgram?.listen?.prerecorded ?? deepgram?.listen?.v1?.media;
-
-    if (!mediaApi) {
-      _error('Deepgram client initialization failed or SDK version mismatch. Expected prerecorded transcription API (listen.prerecorded or listen.v1.media)');
+    if (typeof transcribeUrlFn !== 'function') {
+      _error('Deepgram SDK exposes no URL transcription method on listen.v1.media');
       throw new Error('Transcription service is currently unavailable (Internal Configuration Error)');
     }
 
     const opts = { ...DEFAULT_STT_OPTIONS, ...options };
 
     try {
-      // Prefer an SDK transcribeUrl method when present
-      const transcribeUrlFn = mediaApi.transcribeUrl ?? mediaApi.transcribe_url;
-      let response;
-
-      if (typeof transcribeUrlFn === 'function') {
-        response = await transcribeUrlFn.call(mediaApi, { url }, opts);
-      } else if (typeof (mediaApi.transcribeFile ?? mediaApi.transcribe_file) === 'function') {
-        // Fallback: call the media.transcribeFile REST-backed helper via the SDK
-        const transcribeFileFn = mediaApi.transcribeFile ?? mediaApi.transcribe_file;
-        response = await transcribeFileFn.call(mediaApi, { url }, opts);
-      } else {
-        // Last resort: call Deepgram REST API directly
-        const apiKey = process.env.DEEPGRAM_API_KEY;
-        if (!apiKey) {
-          _error('DEEPGRAM_API_KEY missing for REST fallback');
-          throw new Error('Transcription service is currently unavailable (Internal Configuration Error)');
-        }
-
-        const axios = (await import('axios')).default;
-        const params = new URLSearchParams();
-        for (const [k, v] of Object.entries(opts)) {
-          if (v === undefined || v === null) continue;
-          params.append(k, Array.isArray(v) ? v.join(',') : String(v));
-        }
-
-        const endpoint = `https://api.deepgram.com/v1/listen?${params.toString()}`;
-        const resp = await axios.post(endpoint, { url }, {
-          headers: {
-            Authorization: `Token ${apiKey}`,
-            'Content-Type': 'application/json',
-          },
-        });
-
-        response = { data: resp.data };
-      }
-
+      const response = await transcribeUrlFn.call(media, { url }, opts);
       const { payload, error } = this._normalizeDeepgramResponse(response);
 
       if (error) {
@@ -164,18 +139,38 @@ class STTService {
       info(`STT URL transcribed — ${shaped.transcript.length} chars, confidence ${shaped.confidence.toFixed(2)}`);
       return shaped;
     } catch (err) {
-      _error('STTService.transcribeUrl error:', err);
-      throw err instanceof Error ? err : new Error(String(err));
+      _error('STTService.transcribeUrl error:', err?.body ?? err?.message ?? err);
+      throw this._toSurfacedError(err);
     }
   }
 
   // ── Private helpers ───────────────────────────────────────────────────────
 
   /**
+   * Resolve the prerecorded transcription API across SDK generations.
+   *
+   * v5 exposes `listen.v1.media`; v3/v4 exposed `listen.prerecorded`. Resolving
+   * both means a dependency bump cannot silently take transcription offline —
+   * and if neither is present, that is reported here rather than as an
+   * undefined-is-not-a-function deep inside a request.
+   */
+  _getMediaApi() {
+    const deepgram = getDeepgramClient();
+    const media = deepgram?.listen?.v1?.media ?? deepgram?.listen?.prerecorded;
+
+    if (!media) {
+      _error('Deepgram client initialization failed or SDK version mismatch. Expected listen.v1.media or listen.prerecorded');
+      throw new Error('Transcription service is currently unavailable (Internal Configuration Error)');
+    }
+
+    return media;
+  }
+
+  /**
    * Normalize Deepgram SDK response shapes across versions.
    *
-   * The current SDK resolves to `{ data, rawResponse }`, while older mocks
-   * in this repo used `{ result, error }`.
+   * v5 resolves to the parsed body itself (`{ metadata, results }`); older
+   * versions wrapped it as `{ data, rawResponse }` or `{ result, error }`.
    *
    * @param {object|null|undefined} response
    * @returns {{ payload: object|null, error: { message?: string }|null }}
@@ -185,7 +180,9 @@ class STTService {
       return { payload: null, error: null };
     }
 
-    const payload = response.data ?? response.result ?? response;
+    // `results` present means this is already the parsed body — checked first so
+    // a body that happens to carry a `data` field is not mistaken for a wrapper.
+    const payload = response.results ? response : (response.data ?? response.result ?? response);
     const error = response.error ?? payload?.error ?? null;
 
     return { payload, error };
@@ -214,6 +211,30 @@ class STTService {
     };
 
     return `audio${extMap[mimetype] ?? '.audio'}`;
+  }
+
+  /**
+   * Surface a Deepgram SDK failure with its status and message intact.
+   *
+   * The v5 client throws typed errors carrying `statusCode` and a parsed `body`;
+   * without unwrapping them the controller only ever sees "Bad Request".
+   */
+  _toSurfacedError(err) {
+    if (!err) return new Error('Transcription failed');
+    if (typeof err.statusCode !== 'number') {
+      return err instanceof Error ? err : new Error(String(err));
+    }
+
+    const detail =
+      err.body?.err_msg ||
+      err.body?.error ||
+      err.body?.message ||
+      err.message ||
+      'Deepgram request failed';
+
+    const surfaced = new Error(`Transcription failed: ${detail}`);
+    surfaced.statusCode = err.statusCode;
+    return surfaced;
   }
 
   /**

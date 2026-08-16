@@ -4,7 +4,7 @@
  * Thin HTTP layer — follows the same discipline as user.controller.js:
  *  1. Validate → 2. Delegate to service(s) → 3. Send response
  *
- * No business logic here.  All Deepgram and storage concerns live in
+ * No business logic here.  All speech-provider and storage concerns live in
  * stt.service.js, tts.service.js, and audio.service.js respectively.
  *
  * ── Response persistence strategy ────────────────────────────────────────────
@@ -28,7 +28,7 @@
  * Endpoints:
  *   POST /speech/transcribe          — upload audio file → transcript
  *   POST /speech/transcribe-url      — audio URL → transcript
- *   POST /speech/synthesize          — text → audio stream (≤ 2 s latency per SRS)
+ *   POST /speech/synthesize          — text → spoken audio (≤ 2 s latency per SRS)
  *   GET  /speech/voices              — list available TTS voices
  *   GET  /speech/formats             — list supported audio input formats
  */
@@ -36,7 +36,9 @@
 import sttService    from './stt.service.js';
 import ttsService    from './tts.service.js';
 import audioService  from './audio.service.js';
+import { resolveVoice } from '../interviews/voices.js';
 import * as responseService from '../responses/response.service.js';
+import { PENDING_TRANSCRIPT } from '../../core/utils/helpers.js';
 import {
   transcribeFileSchema,
   transcribeUrlSchema,
@@ -71,8 +73,9 @@ async function _createAudioResponseRow({ sessionId, questionId, userId, audioUrl
       userId,
       {
         // Placeholder text so the NOT NULL constraint is satisfied.
-        // Replaced with the real transcript in Phase 4.
-        transcribed_text:          '[Transcription in progress…]',
+        // Replaced with the real transcript in Phase 4. Readers treat a row
+        // still carrying it as unanswered — see hasRealAnswer.
+        transcribed_text:          PENDING_TRANSCRIPT,
         original_audio_url:        audioUrl,
         storage_path:              storagePath,
         response_duration_seconds: null,   // populated after STT
@@ -230,6 +233,13 @@ export const transcribeAudio = asyncHandler(async (req, res, next) => {
   let transcriptionResult;
   try {
     transcriptionResult = await sttService.transcribeBuffer(buffer, mimetype, transcriptionOptions);
+
+    // An empty transcript is a failure to hear the answer, not an answer of
+    // nothing — treat it exactly like a transcription error so the client can
+    // offer a retype instead of advancing over a blank.
+    if (!transcriptionResult.transcript.trim()) {
+      throw new Error('No intelligible speech was found in the recording');
+    }
   } catch (err) {
     _error('[transcribeAudio] STT failed:', err.message);
 
@@ -257,7 +267,14 @@ export const transcribeAudio = asyncHandler(async (req, res, next) => {
     });
   }
 
-  info(`[transcribeAudio] STT complete [chars=${transcriptionResult.transcript.length} confidence=${transcriptionResult.confidence.toFixed(3)}]`);
+  info(
+    `[transcribeAudio] STT complete [chars=${transcriptionResult.transcript.length} ` +
+    `confidence=${transcriptionResult.confidence?.toFixed(3) ?? 'n/a'}]`
+  );
+
+  // Prefer the provider's measured duration; the client's own timing is the
+  // fallback for a provider that does not report one.
+  const duration = transcriptionResult.duration ?? value.duration_seconds ?? null;
 
   // ── PHASE 4: Enrich response row with transcript ───────────────────────────
   if (hasContext && responseRow) {
@@ -265,7 +282,7 @@ export const transcribeAudio = asyncHandler(async (req, res, next) => {
       responseId:  responseRow.id,
       userId:      req.user.id,
       transcript:  transcriptionResult.transcript,
-      duration:    transcriptionResult.duration,
+      duration,
       confidence:  transcriptionResult.confidence,
       detected_language: transcriptionResult.detected_language,
       request_id: transcriptionResult.request_id,
@@ -278,7 +295,7 @@ export const transcribeAudio = asyncHandler(async (req, res, next) => {
     data: {
       transcript:        transcriptionResult.transcript,
       confidence:        transcriptionResult.confidence,
-      duration:          transcriptionResult.duration,
+      duration,
       detected_language: transcriptionResult.detected_language,
       words:             transcriptionResult.words,
       paragraphs:        transcriptionResult.paragraphs,
@@ -333,6 +350,10 @@ export const transcribeUrl = asyncHandler(async (req, res, next) => {
   let result;
   try {
     result = await sttService.transcribeUrl(value.url, transcriptionOptions);
+
+    if (!result.transcript.trim()) {
+      throw new Error('No intelligible speech was found in that audio');
+    }
   } catch (err) {
     _error('[transcribeUrl] STT failed:', err.message);
 
@@ -357,13 +378,15 @@ export const transcribeUrl = asyncHandler(async (req, res, next) => {
 
   info(`[transcribeUrl] STT complete [user=${req.user.id} chars=${result.transcript.length}]`);
 
+  const duration = result.duration ?? value.duration_seconds ?? null;
+
   // ── PHASE 4: Enrich response row with transcript ───────────────────────────
   if (hasContext && responseRow) {
     responseRow = await _enrichResponseWithTranscript({
       responseId:  responseRow.id,
       userId:      req.user.id,
       transcript:  result.transcript,
-      duration:    result.duration,
+      duration,
       confidence:  result.confidence,
       existingRow: responseRow,
     });
@@ -374,7 +397,7 @@ export const transcribeUrl = asyncHandler(async (req, res, next) => {
     data: {
       transcript:        result.transcript,
       confidence:        result.confidence,
-      duration:          result.duration,
+      duration,
       detected_language: result.detected_language,
       words:             result.words,
       paragraphs:        result.paragraphs,
@@ -389,13 +412,14 @@ export const transcribeUrl = asyncHandler(async (req, res, next) => {
 /**
  * POST /api/v1/speech/synthesize
  *
- * Converts text to speech and streams the audio directly to the client.
+ * Converts text to speech and writes the audio to the client.
  *
- * SRS requirement: playback must start within 1–2 seconds.
- * We stream (Transfer-Encoding: chunked) so the first audio chunk
- * arrives at the client as soon as Deepgram starts generating audio.
+ * SRS requirement: playback must start within 1–2 seconds. Gemini returns the
+ * whole clip in one response, so there is nothing to stream incrementally; a
+ * single spoken question comfortably fits the budget.
  *
- * Body: { text, voice?, encoding?, sample_rate? }
+ * Body: { text, voice?, style?, encoding?, sample_rate? }
+ * Returns: 24 kHz mono WAV.
  */
 export const synthesizeSpeech = asyncHandler(async (req, res, next) => {
   const { valid, errors, value } = validateInput(req.body, synthesizeSchema);
@@ -403,17 +427,18 @@ export const synthesizeSpeech = asyncHandler(async (req, res, next) => {
     return next(new AppError(Object.values(errors).join('; '), 400));
   }
 
+  // Clients send a VoxPrep voice id from the interviewer roster ("m_measured_01");
+  // resolveVoice maps it to a catalogue voice and passes raw catalogue keys
+  // through unchanged, so older callers keep working.
+  const voice = resolveVoice(value.voice);
+
   await ttsService.synthesizeToStream(
     value.text,
-    {
-      voice:       value.voice,
-      encoding:    value.encoding,
-      sample_rate: value.sample_rate,
-    },
+    { voice, style: value.style },
     res
   );
 
-  info(`[synthesizeSpeech] user=${req.user.id} voice=${value.voice} chars=${value.text.trim().length}`);
+  info(`[synthesizeSpeech] user=${req.user.id} voice=${value.voice}→${voice} chars=${value.text.trim().length}`);
 });
 
 // ─── Metadata ─────────────────────────────────────────────────────────────────

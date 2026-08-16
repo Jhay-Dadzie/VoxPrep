@@ -11,7 +11,7 @@
  *   Path:   {userId}/{sessionId-or-transcribe}/{questionId-or-audio}_{timestamp}_{shortUuid}{ext}
  *
  * Why separate from stt.service?
- *  - STT service owns Deepgram concerns only
+ *  - STT service owns speech-provider concerns only
  *  - Audio service owns file I/O concerns
  *  - Controller composes them as needed (upload → transcribe, or transcribe-only)
  */
@@ -52,7 +52,7 @@ class AudioService {
    * Validate an audio buffer and MIME type.
    * Throws a descriptive Error on failure; returns true on success.
    *
-   * Called before every transcription so bad data never reaches Deepgram.
+   * Called before every transcription so bad data never reaches the model.
    *
    * @param {Buffer} buffer
    * @param {string} mimetype

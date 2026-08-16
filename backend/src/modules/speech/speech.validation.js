@@ -73,6 +73,12 @@ const transcribeFileSchema = Joi.object({
   paragraphs:   booleanDefault(true),
   diarize:      booleanDefault(false),
   utterances:   booleanDefault(false),
+  /**
+   * How long the client recorded for. Gemini transcription returns no timing
+   * metadata, so the recorder's own measurement is the only duration available
+   * — without it, response_duration_seconds would be null for every answer.
+   */
+  duration_seconds: Joi.number().min(0).max(7200).optional(),
 })
   // Require both or neither
   .and('session_id', 'question_id')
@@ -98,6 +104,7 @@ const transcribeUrlSchema = Joi.object({
   paragraphs:   booleanDefault(true),
   diarize:      booleanDefault(false),
   utterances:   booleanDefault(false),
+  duration_seconds: Joi.number().min(0).max(7200).optional(),
 })
   .and('session_id', 'question_id')
   .messages({
@@ -107,28 +114,36 @@ const transcribeUrlSchema = Joi.object({
 
 // ─── TTS synthesis ────────────────────────────────────────────────────────────
 
+/**
+ * `encoding` and `sample_rate` are advisory. The format depends on which
+ * provider answers — Gemini returns 24 kHz mono WAV, the Deepgram fallback
+ * returns MP3 — so the authoritative answer is the response's Content-Type,
+ * and clients must read it rather than assume what they asked for. The fields
+ * stay accepted so existing callers are not rejected over a field that no
+ * longer decides anything.
+ */
 const synthesizeSchema = Joi.object({
   text: Joi.string().trim().min(1).max(4096).required().messages({
     'string.empty':   'text cannot be empty',
     'string.max':     'text cannot exceed 4096 characters per request',
     'any.required':   'text is required',
   }),
-  voice: Joi.string().trim().default('asteria').messages({
-    'string.base': 'voice must be a string (e.g. "asteria", "orion")',
+  voice: Joi.string().trim().default('kore').messages({
+    'string.base': 'voice must be a string (e.g. "kore", "orus")',
+  }),
+  style: Joi.string().trim().max(300).optional().messages({
+    'string.max': 'style cannot exceed 300 characters',
   }),
   encoding: Joi.string()
-    .valid('mp3', 'wav', 'ogg', 'flac', 'aac', 'linear16', 'mulaw')
-    .default('mp3')
+    .valid('wav', 'mp3')
+    .default('wav')
     .messages({
-      'any.only': 'encoding must be one of: mp3, wav, ogg, flac, aac, linear16, mulaw',
+      'any.only': 'encoding must be "wav" or "mp3"; the response Content-Type states what was actually produced',
     }),
   sample_rate: Joi.number()
     .integer()
     .valid(8000, 16000, 22050, 24000, 44100, 48000)
-    .default(24000)
-    .messages({
-      'any.only': 'sample_rate must be one of: 8000, 16000, 22050, 24000, 44100, 48000',
-    }),
+    .default(24000),
 });
 
 // ─── Generic validator ────────────────────────────────────────────────────────

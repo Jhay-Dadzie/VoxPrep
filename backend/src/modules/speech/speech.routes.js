@@ -106,6 +106,7 @@ router.use(protect);
  *   paragraphs   {boolean} default true
  *   diarize      {boolean} default false
  *   utterances   {boolean} default false
+ *   duration_seconds {number} optional — the recorder's measured length
  *
  * Response 200:
  *   { status, data: { transcript, confidence, duration, detected_language,
@@ -127,16 +128,16 @@ router.post('/transcribe-url', asyncHandler(transcribeUrl));
  * POST /api/v1/speech/synthesize
  * Convert text to speech.
  *
- * Body: { text, voice?, encoding?, sample_rate? }
+ * Body: { text, voice?, style?, encoding?, sample_rate? }
  *
- * Response 200: audio binary stream
- *   Content-Type: audio/mpeg  (or chosen encoding)
- *   Transfer-Encoding: chunked
+ * Response 200: audio binary (24 kHz mono WAV)
+ *   Content-Type: audio/wav
  *   X-Voice: <voice key>
  *   X-Character-Count: <number>
  *
- * Voice options: asteria, luna, stella, athena, hera, orion, arcas,
- *                perseus, angus, orpheus, helios, zeus
+ * Voice options: kore, sulafat, erinome, laomedeia, aoede, achernar, gacrux,
+ *                iapetus, alnilam, schedar, rasalgethi, orus, algieba,
+ *                charon, puck — or a VoxPrep roster voice id.
  */
 router.post('/synthesize', asyncHandler(synthesizeSpeech));
 

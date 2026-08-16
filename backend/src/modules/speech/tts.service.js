@@ -1,174 +1,261 @@
 /**
  * Text-to-Speech Service
  *
- * Powered by Deepgram Aura voice models.
- * Converts interview questions (and optional feedback) into natural audio.
+ * Powered by Gemini's speech-generation models. Speaks the interviewer's
+ * questions during a live session.
  *
- * SRS requirement: TTS playback must start within 1–2 seconds.
- * We meet this by streaming directly to the HTTP response rather than
- * fully buffering — see synthesizeToStream(). A full-buffer helper
- * (synthesize) is also provided for storage-upload flows.
+ * ── Why the output is WAV ────────────────────────────────────────────────────
+ *
+ * Gemini TTS does not return a container format. It returns raw signed 16-bit
+ * little-endian PCM (mono, 24 kHz) as base64 inside inlineData. Mobile audio
+ * players cannot open headerless PCM, so this service prepends a 44-byte RIFF
+ * header before the bytes leave here — every caller gets a playable file.
+ *
+ * ── Why synthesizeToStream no longer streams ─────────────────────────────────
+ *
+ * generateContent is a single-shot call: the audio arrives whole or not at all,
+ * so there is nothing to pipe incrementally. The method keeps its name and
+ * signature because the controller's contract is unchanged, and the latency
+ * budget still holds — a one-sentence question comes back well inside a second.
  *
  * Design decisions:
- *  - synthesizeToStream:  pipes Web ReadableStream → Node stream → HTTP response (low latency)
- *  - synthesize:          buffers fully for upload or test scenarios
- *  - Voice keys are short friendly names; the service maps to full model IDs
+ *  - Singleton class (matches stt.service.js / audio.service.js)
+ *  - Voice keys are short friendly names; the service maps to Gemini voice names
  *  - All errors throw so the controller's try/catch handles HTTP status codes
  */
 
-import { Readable } from 'node:stream';
+import axios from 'axios';
+import {
+  GEMINI_API_KEY,
+  GEMINI_ENDPOINT,
+  GEMINI_TTS_MODEL,
+} from '../../config/gemini.js';
 import { getDeepgramClient } from '../../config/deepgram.js';
-import { error as _error, info } from '../../core/errors/logger.js';
+import { error as _error, info, warn } from '../../core/errors/logger.js';
 
 // ─── Voice catalogue ──────────────────────────────────────────────────────────
 
 /**
- * Deepgram Aura voice models (as of 2025).
+ * Gemini prebuilt voices, filtered to the ones that read as interviewers.
  * Key: short friendly name used in the API.
- * Model: full Deepgram model string.
+ * Model: the `voiceName` Gemini expects in speechConfig.
+ *
+ * `accent` is descriptive only — Gemini voices are not accent-locked the way
+ * Aura's were, so the field records the register the voice actually reads as.
  */
-export const DEEPGRAM_VOICES = {
-  // Female
-  asteria:  { model: 'aura-asteria-en',  gender: 'female', accent: 'American',  description: 'Clear, professional — recommended default' },
-  luna:     { model: 'aura-luna-en',     gender: 'female', accent: 'American',  description: 'Soft and calm' },
-  stella:   { model: 'aura-stella-en',   gender: 'female', accent: 'American',  description: 'Warm and energetic' },
-  athena:   { model: 'aura-athena-en',   gender: 'female', accent: 'British',   description: 'Polished British English' },
-  hera:     { model: 'aura-hera-en',     gender: 'female', accent: 'American',  description: 'Authoritative and calm' },
-  // Male
-  orion:    { model: 'aura-orion-en',    gender: 'male',   accent: 'American',  description: 'Deep and authoritative' },
-  arcas:    { model: 'aura-arcas-en',    gender: 'male',   accent: 'American',  description: 'Professional and clear' },
-  perseus:  { model: 'aura-perseus-en',  gender: 'male',   accent: 'American',  description: 'Neutral and professional' },
-  angus:    { model: 'aura-angus-en',    gender: 'male',   accent: 'Irish',     description: 'Warm Irish accent' },
-  orpheus:  { model: 'aura-orpheus-en',  gender: 'male',   accent: 'American',  description: 'Smooth and natural' },
-  helios:   { model: 'aura-helios-en',   gender: 'male',   accent: 'British',   description: 'Polished British English' },
-  zeus:     { model: 'aura-zeus-en',     gender: 'male',   accent: 'American',  description: 'Deep and powerful' },
+export const GEMINI_VOICES = {
+  // Female-presenting
+  kore:      { model: 'Kore',      gender: 'female', accent: 'Neutral', description: 'Firm and composed — recommended default' },
+  sulafat:   { model: 'Sulafat',   gender: 'female', accent: 'Neutral', description: 'Warm and conversational' },
+  erinome:   { model: 'Erinome',   gender: 'female', accent: 'Neutral', description: 'Clear and precise' },
+  laomedeia: { model: 'Laomedeia', gender: 'female', accent: 'Neutral', description: 'Upbeat and energetic' },
+  aoede:     { model: 'Aoede',     gender: 'female', accent: 'Neutral', description: 'Light and easy-going' },
+  achernar:  { model: 'Achernar',  gender: 'female', accent: 'Neutral', description: 'Soft and unhurried' },
+  gacrux:    { model: 'Gacrux',    gender: 'female', accent: 'Neutral', description: 'Mature and authoritative' },
+
+  // Male-presenting
+  iapetus:     { model: 'Iapetus',     gender: 'male', accent: 'Neutral', description: 'Clear and professional' },
+  alnilam:     { model: 'Alnilam',     gender: 'male', accent: 'Neutral', description: 'Firm and direct' },
+  schedar:     { model: 'Schedar',     gender: 'male', accent: 'Neutral', description: 'Even and neutral' },
+  rasalgethi:  { model: 'Rasalgethi',  gender: 'male', accent: 'Neutral', description: 'Measured and informative' },
+  orus:        { model: 'Orus',        gender: 'male', accent: 'Neutral', description: 'Deep and forceful' },
+  algieba:     { model: 'Algieba',     gender: 'male', accent: 'Neutral', description: 'Smooth and natural' },
+  charon:      { model: 'Charon',      gender: 'male', accent: 'Neutral', description: 'Informative and steady' },
+  puck:        { model: 'Puck',        gender: 'male', accent: 'Neutral', description: 'Bright and quick' },
 };
 
-const DEFAULT_VOICE      = 'asteria';
-const DEFAULT_ENCODING   = 'mp3';    // widest mobile compatibility
-const DEFAULT_SAMPLE_RATE = 24000;
-const MAX_TEXT_LENGTH    = 4096;     // characters per request
-
-/** Maps encoding → MIME type sent in Content-Type */
-const ENCODING_MIME = {
-  mp3:      'audio/mpeg',
-  wav:      'audio/wav',
-  ogg:      'audio/ogg',
-  flac:     'audio/flac',
-  aac:      'audio/aac',
-  linear16: 'audio/wav',
-  mulaw:    'audio/basic',
+/**
+ * Deepgram Aura stand-ins, used when Gemini will not synthesize.
+ *
+ * Gemini's free TTS tier allows ten requests a minute, and a fifteen-question
+ * interview can walk into that ceiling — at which point the question is never
+ * spoken and the candidate is left reading. Deepgram is already a dependency
+ * for transcription, so it doubles as the safety net. The mapping is by
+ * register rather than by name: the point is that the interviewer keeps a
+ * consistent-sounding voice, not that it is the same synthesiser.
+ */
+const DEEPGRAM_FALLBACK_VOICES = {
+  female: 'aura-2-thalia-en',
+  male: 'aura-2-apollo-en',
 };
+
+const DEFAULT_DEEPGRAM_VOICE = DEEPGRAM_FALLBACK_VOICES.female;
+const MP3_MIME = 'audio/mpeg';
+
+const DEFAULT_VOICE = 'kore';
+const MAX_TEXT_LENGTH = 4096;          // characters per request
+
+/** Gemini TTS always returns mono 16-bit PCM at this rate. */
+export const TTS_SAMPLE_RATE = 24000;
+const TTS_CHANNELS = 1;
+const TTS_BITS_PER_SAMPLE = 16;
+
+const WAV_MIME = 'audio/wav';
+
+/**
+ * Read style prefix. Gemini TTS takes direction in the prompt itself, so this
+ * is how the interviewer ends up sounding like an interviewer rather than a
+ * narrator reading a sentence off a page.
+ */
+const DEFAULT_STYLE = 'Say this the way an interviewer speaks to a candidate — calm, clear, unhurried, and neutral';
 
 // ─── Service ──────────────────────────────────────────────────────────────────
 
 class TTSService {
   /**
-   * Synthesize speech and pipe the audio stream directly to an HTTP response.
+   * Synthesize speech and write the audio to an HTTP response.
    *
-   * This is the primary method for the `/speech/synthesize` endpoint.
-   * Streaming means the first audio chunk reaches the client in ~200–500 ms
-   * (network permitting), meeting the SRS < 2 s playback-start requirement.
-   *
-   * @param {string}         text     - Text to speak (≤ 4096 chars)
-   * @param {object}         options
-   * @param {string}         [options.voice='asteria']   - Voice key
-   * @param {string}         [options.encoding='mp3']
-   * @param {number}         [options.sample_rate=24000]
+   * @param {string} text     - Text to speak (≤ 4096 chars)
+   * @param {object} options
+   * @param {string} [options.voice='kore'] - Voice key or raw Gemini voice name
+   * @param {string} [options.style]        - Delivery direction for the model
    * @param {import('http').ServerResponse} res  - Express response object
    * @returns {Promise<{ character_count: number, voice: string, content_type: string }>}
+   *          content_type is 'audio/wav' or 'audio/mpeg' depending on which
+   *          provider answered — do not assume one.
    */
   async synthesizeToStream(text, options = {}, res) {
-    const { voice: voiceKey, encoding, sample_rate, model } =
-      this._resolveOptions(text, options);
+    const { buffer, voice, character_count, content_type } = await this.synthesize(text, options);
 
-    const deepgram = getDeepgramClient();
+    // The content type is whichever provider answered — WAV from Gemini, MP3
+    // from the Deepgram fallback — so the client can name the file correctly
+    // instead of guessing and handing the player an unreadable extension.
+    res.set({
+      'Content-Type': content_type,
+      'Content-Length': String(buffer.length),
+      'X-Voice': voice,
+      'X-Character-Count': String(character_count),
+    });
 
-    try {
-      const response = await deepgram.speak.request(
-        { text: text.trim() },
-        { model, encoding, sample_rate }
-      );
+    res.end(buffer);
 
-      const stream = await response.getStream();
-      if (!stream) {
-        throw new Error('Deepgram TTS returned no audio stream');
-      }
-
-      const contentType = ENCODING_MIME[encoding] ?? `audio/${encoding}`;
-
-      // Set headers before piping — they cannot be changed after the stream starts
-      res.set({
-        'Content-Type':     contentType,
-        'Transfer-Encoding': 'chunked',
-        'X-Voice':          voiceKey,
-        'X-Character-Count': String(text.trim().length),
-      });
-
-      // Convert Web ReadableStream → Node.js Readable → pipe to HTTP response
-      const nodeStream = Readable.fromWeb(stream);
-      await new Promise((resolve, reject) => {
-        nodeStream.on('error', reject);
-        res.on('error', reject);
-        res.on('finish', resolve);
-        nodeStream.pipe(res);
-      });
-
-      info(`TTS streamed: "${voiceKey}" voice, ${text.trim().length} chars`);
-
-      return {
-        character_count: text.trim().length,
-        voice: voiceKey,
-        content_type: contentType,
-      };
-    } catch (err) {
-      _error('TTSService.synthesizeToStream error:', err);
-      throw err instanceof Error ? err : new Error(String(err));
-    }
+    return { character_count, voice, content_type };
   }
 
   /**
-   * Synthesize speech and return a fully-buffered result.
-   *
-   * Use this when you need the audio bytes (e.g. to upload to Supabase Storage).
-   * For direct playback, prefer synthesizeToStream — it is faster.
+   * Synthesize speech and return a fully-buffered WAV file.
    *
    * @param {string}  text
    * @param {object}  options
    * @returns {Promise<{ buffer: Buffer, content_type: string, character_count: number, voice: string, model: string }>}
    */
   async synthesize(text, options = {}) {
-    const { voice: voiceKey, encoding, sample_rate, model } =
-      this._resolveOptions(text, options);
+    const { voice: voiceKey, voiceName, style } = this._resolveOptions(text, options);
+    const spoken = text.trim();
 
-    const deepgram = getDeepgramClient();
+    if (!GEMINI_API_KEY) {
+      throw new Error('Speech synthesis is unavailable (missing Gemini API key)');
+    }
 
     try {
-      const response = await deepgram.speak.request(
-        { text: text.trim() },
-        { model, encoding, sample_rate }
-      );
-
-      const stream = await response.getStream();
-      if (!stream) {
-        throw new Error('Deepgram TTS returned no audio stream');
+      return await this._request({ spoken, style, voiceKey, voiceName });
+    } catch (err) {
+      // An unrecognised voice is rejected outright — Gemini does not fall back
+      // to a default the way the old provider did. Silence mid-interview is a
+      // far worse outcome than the wrong voice, so retry once with the default
+      // rather than failing the question.
+      if (this._isUnknownVoiceError(err) && voiceName !== GEMINI_VOICES[DEFAULT_VOICE].model) {
+        warn(`TTS voice "${voiceName}" was rejected; falling back to "${DEFAULT_VOICE}"`);
+        return this._request({
+          spoken,
+          style,
+          voiceKey: DEFAULT_VOICE,
+          voiceName: GEMINI_VOICES[DEFAULT_VOICE].model,
+        });
       }
 
-      const buffer = await this._streamToBuffer(stream);
+      // Anything else — a rate limit, an outage, a safety refusal — means this
+      // question would go unspoken. Try the other provider before giving up.
+      warn(`Gemini TTS failed (${err.statusCode ?? 'no status'}: ${err.message}); trying Deepgram`);
+      try {
+        return await this._synthesizeWithDeepgram({ spoken, voiceKey });
+      } catch (fallbackErr) {
+        _error('Deepgram TTS fallback also failed:', fallbackErr?.message ?? fallbackErr);
+        throw err;   // report the primary failure; the fallback is an implementation detail
+      }
+    }
+  }
 
-      info(`TTS buffered: "${voiceKey}" voice, ${text.trim().length} chars → ${buffer.length} bytes`);
+  /**
+   * Speak the question through Deepgram Aura.
+   *
+   * Returns MP3 rather than WAV, which is why every caller reads the content
+   * type off the result instead of assuming one — the two providers do not
+   * agree on a format and converting between them server-side would buy
+   * nothing that the client's own player cannot do.
+   */
+  async _synthesizeWithDeepgram({ spoken, voiceKey }) {
+    const gender = GEMINI_VOICES[voiceKey]?.gender;
+    const model = DEEPGRAM_FALLBACK_VOICES[gender] ?? DEFAULT_DEEPGRAM_VOICE;
+
+    const deepgram = getDeepgramClient();
+    const audio = deepgram?.speak?.v1?.audio;
+
+    if (typeof audio?.generate !== 'function') {
+      throw new Error('Deepgram SDK exposes no speak.v1.audio.generate method');
+    }
+
+    const response = await audio.generate({ text: spoken, model, encoding: 'mp3' });
+    const buffer = Buffer.from(await response.arrayBuffer());
+
+    if (buffer.length === 0) {
+      throw new Error('Deepgram TTS returned an empty audio payload');
+    }
+
+    info(`TTS synthesized via Deepgram: "${model}", ${spoken.length} chars → ${buffer.length} bytes`);
+
+    return {
+      buffer,
+      content_type: MP3_MIME,
+      character_count: spoken.length,
+      voice: voiceKey,
+      model,
+    };
+  }
+
+  /** One synthesis request. Split out so the voice fallback can repeat it. */
+  async _request({ spoken, style, voiceKey, voiceName }) {
+    try {
+      const response = await axios.post(
+        `${GEMINI_ENDPOINT}/models/${GEMINI_TTS_MODEL}:generateContent`,
+        {
+          contents: [{ parts: [{ text: `${style}: ${spoken}` }] }],
+          generationConfig: {
+            responseModalities: ['AUDIO'],
+            speechConfig: {
+              voiceConfig: { prebuiltVoiceConfig: { voiceName } },
+            },
+          },
+        },
+        {
+          headers: {
+            'Content-Type': 'application/json',
+            'x-goog-api-key': GEMINI_API_KEY,
+          },
+        }
+      );
+
+      const pcm = this._extractAudio(response.data);
+      const buffer = this._pcmToWav(pcm);
+
+      info(`TTS synthesized: "${voiceKey}" voice, ${spoken.length} chars → ${buffer.length} bytes`);
 
       return {
         buffer,
-        content_type: ENCODING_MIME[encoding] ?? `audio/${encoding}`,
-        character_count: text.trim().length,
+        content_type: WAV_MIME,
+        character_count: spoken.length,
         voice: voiceKey,
-        model,
+        model: GEMINI_TTS_MODEL,
       };
     } catch (err) {
-      _error('TTSService.synthesize error:', err);
-      throw err instanceof Error ? err : new Error(String(err));
+      _error('TTSService.synthesize error:', err.response?.data || err.message || err);
+      throw this._toSurfacedError(err);
     }
+  }
+
+  /** Distinguishes "that voice does not exist" from every other 400. */
+  _isUnknownVoiceError(err) {
+    return err?.statusCode === 400 && /voice name/i.test(err.message || '');
   }
 
   /**
@@ -177,7 +264,7 @@ class TTSService {
    * @returns {VoiceInfo[]}
    */
   getAvailableVoices() {
-    return Object.entries(DEEPGRAM_VOICES).map(([key, meta]) => ({
+    return Object.entries(GEMINI_VOICES).map(([key, meta]) => ({
       key,
       model:       meta.model,
       gender:      meta.gender,
@@ -190,6 +277,11 @@ class TTSService {
 
   /**
    * Validate text and resolve all option fields with defaults.
+   *
+   * Unknown voice keys are passed through as raw Gemini voice names, since the
+   * catalogue here is a curated subset of the ones Gemini offers. If the name
+   * turns out not to exist, synthesize() retries with the default rather than
+   * letting the question go unspoken.
    */
   _resolveOptions(text, options) {
     if (!text || typeof text !== 'string' || text.trim().length === 0) {
@@ -203,36 +295,85 @@ class TTSService {
       );
     }
 
-    const voiceKey = (options.voice ?? DEFAULT_VOICE).toLowerCase();
-    const voiceDef = DEEPGRAM_VOICES[voiceKey];
+    const requested = String(options.voice ?? DEFAULT_VOICE).trim();
+    const voiceDef = GEMINI_VOICES[requested.toLowerCase()];
 
-    // Allow a raw Deepgram model string as fallback (e.g. 'aura-asteria-en')
-    const model = voiceDef?.model ?? voiceKey;
-
-    const encoding   = options.encoding    ?? DEFAULT_ENCODING;
-    const sample_rate = options.sample_rate ?? DEFAULT_SAMPLE_RATE;
-
-    return { voice: voiceKey, encoding, sample_rate, model };
+    return {
+      voice: voiceDef ? requested.toLowerCase() : requested,
+      voiceName: voiceDef?.model ?? requested,
+      style: options.style?.trim() || DEFAULT_STYLE,
+    };
   }
 
   /**
-   * Drain a Web ReadableStream into a single Node.js Buffer.
+   * Pull the base64 PCM payload out of a generateContent response.
+   *
+   * A refusal or a safety block comes back as a well-formed response with no
+   * audio part, so the absence of inlineData is reported as a first-class
+   * failure rather than an undefined further down.
    */
-  async _streamToBuffer(stream) {
-    const reader = stream.getReader();
-    const chunks = [];
+  _extractAudio(payload) {
+    const parts = payload?.candidates?.[0]?.content?.parts ?? [];
+    const audioPart = parts.find((part) => part?.inlineData?.data || part?.inline_data?.data);
+    const data = audioPart?.inlineData?.data ?? audioPart?.inline_data?.data;
 
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      if (value) chunks.push(Buffer.from(value));
+    if (!data) {
+      const reason =
+        payload?.promptFeedback?.blockReason ||
+        payload?.candidates?.[0]?.finishReason ||
+        'no audio in response';
+      throw new Error(`Gemini TTS returned no audio (${reason})`);
     }
 
-    if (chunks.length === 0) {
-      throw new Error('Deepgram TTS returned an empty audio stream');
+    const buffer = Buffer.from(data, 'base64');
+    if (buffer.length === 0) {
+      throw new Error('Gemini TTS returned an empty audio payload');
     }
 
-    return Buffer.concat(chunks);
+    return buffer;
+  }
+
+  /**
+   * Wrap raw PCM in a RIFF/WAVE container.
+   *
+   * Gemini returns headerless signed 16-bit little-endian samples, which is
+   * exactly what a WAV data chunk holds — so this is a 44-byte prefix, not a
+   * re-encode.
+   */
+  _pcmToWav(pcm, sampleRate = TTS_SAMPLE_RATE) {
+    const byteRate = (sampleRate * TTS_CHANNELS * TTS_BITS_PER_SAMPLE) / 8;
+    const blockAlign = (TTS_CHANNELS * TTS_BITS_PER_SAMPLE) / 8;
+    const header = Buffer.alloc(44);
+
+    header.write('RIFF', 0);
+    header.writeUInt32LE(36 + pcm.length, 4);   // chunk size: everything after this field
+    header.write('WAVE', 8);
+    header.write('fmt ', 12);
+    header.writeUInt32LE(16, 16);               // PCM fmt chunk length
+    header.writeUInt16LE(1, 20);                // audio format: 1 = PCM
+    header.writeUInt16LE(TTS_CHANNELS, 22);
+    header.writeUInt32LE(sampleRate, 24);
+    header.writeUInt32LE(byteRate, 28);
+    header.writeUInt16LE(blockAlign, 32);
+    header.writeUInt16LE(TTS_BITS_PER_SAMPLE, 34);
+    header.write('data', 36);
+    header.writeUInt32LE(pcm.length, 40);
+
+    return Buffer.concat([header, pcm]);
+  }
+
+  /** Turn an axios/Gemini failure into an Error carrying the upstream status. */
+  _toSurfacedError(err) {
+    if (!err?.response) {
+      return err instanceof Error ? err : new Error(String(err));
+    }
+
+    const apiError = err.response.data?.error || {};
+    const surfaced = new Error(
+      apiError.message || err.response.statusText || 'Gemini TTS request failed'
+    );
+    surfaced.statusCode = err.response.status || 502;
+    return surfaced;
   }
 }
 
