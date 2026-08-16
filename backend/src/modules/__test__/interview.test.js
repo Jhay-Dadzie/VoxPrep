@@ -176,7 +176,9 @@ describe('InterviewSession Service', () => {
     it('should set status to completed and calculate duration', async () => {
       // First get session to read started_at
       mockResponse({ started_at: new Date(Date.now() - 120000).toISOString() }); // 2 minutes ago
-      // Second update
+      // Then the two counters, then the update
+      mockResponse(null, null, 6);   // questions asked
+      mockResponse(null, null, 5);   // answers given
       mockResponse({ id: 'sess-1' });
 
       const result = await service.completeSession('sess-1', 'user-123');
@@ -190,10 +192,31 @@ describe('InterviewSession Service', () => {
 
     it('should set duration to null if started_at is null', async () => {
       mockResponse({ started_at: null });
+      mockResponse(null, null, 0);
+      mockResponse(null, null, 0);
       mockResponse({ id: 'sess-1' });
       await service.completeSession('sess-1', 'user-123');
       expect(mockSupabase.update).toHaveBeenCalledWith(expect.objectContaining({
         duration_seconds: null
+      }));
+    });
+
+    /**
+     * A semi-structured interview stops when the interviewer closes or the
+     * candidate ends it, so the counters written during the session can be
+     * ahead of what actually happened. Completing settles them.
+     */
+    it('should settle the question counters against what was really asked', async () => {
+      mockResponse({ started_at: new Date().toISOString() });
+      mockResponse(null, null, 8);   // 8 questions asked
+      mockResponse(null, null, 7);   // 7 of them answered
+      mockResponse({ id: 'sess-1' });
+
+      await service.completeSession('sess-1', 'user-123');
+
+      expect(mockSupabase.update).toHaveBeenCalledWith(expect.objectContaining({
+        total_questions: 8,
+        questions_answered: 7
       }));
     });
   });
