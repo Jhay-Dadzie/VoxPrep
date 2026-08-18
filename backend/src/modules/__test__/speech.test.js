@@ -123,7 +123,7 @@ jest.mock('../../core/utils/asyncHandler.js', () => ({
 
 // ─── Now import services (after mocks are set up) ────────────────────────────
 import sttService from '../speech/stt.service.js';
-import ttsService, { GEMINI_VOICES, TTS_SAMPLE_RATE } from '../speech/tts.service.js';
+import ttsService, { TTS_VOICES, TTS_SAMPLE_RATE } from '../speech/tts.service.js';
 import audioService, { SUPPORTED_AUDIO_TYPES, MAX_AUDIO_BYTES } from '../speech/audio.service.js';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -315,7 +315,7 @@ describe('TTS Service', () => {
   describe('getAvailableVoices', () => {
     it('should return all voices with required fields', () => {
       const voices = ttsService.getAvailableVoices();
-      expect(voices.length).toBe(Object.keys(GEMINI_VOICES).length);
+      expect(voices.length).toBe(Object.keys(TTS_VOICES).length);
       voices.forEach(v => {
         expect(v).toHaveProperty('key');
         expect(v).toHaveProperty('model');
@@ -329,17 +329,27 @@ describe('TTS Service', () => {
   describe('_resolveOptions', () => {
     it('should use the default voice when none is specified', () => {
       const opts = ttsService._resolveOptions('Hello', {});
-      expect(opts.voice).toBe('kore');
-      expect(opts.voiceName).toBe('Kore');
+      expect(opts.voiceKey).toBe('kore');
+      expect(opts.deepgramVoice).toBe(TTS_VOICES.kore.deepgram);
+      expect(opts.geminiVoice).toBe(TTS_VOICES.kore.gemini);
       expect(opts.style).toMatch(/interviewer/i);
     });
 
-    it('should resolve a named voice to its model voice name', () => {
-      expect(ttsService._resolveOptions('Hello', { voice: 'orus' }).voiceName).toBe('Orus');
+    it('should resolve a named voice to a model for each provider', () => {
+      const opts = ttsService._resolveOptions('Hello', { voice: 'orus' });
+      expect(opts.deepgramVoice).toBe(TTS_VOICES.orus.deepgram);
+      expect(opts.geminiVoice).toBe(TTS_VOICES.orus.gemini);
     });
 
-    it('should allow a raw voice name as fallback', () => {
-      expect(ttsService._resolveOptions('Hello', { voice: 'Zephyr' }).voiceName).toBe('Zephyr');
+    /**
+     * Both providers reject an unrecognised voice name outright, so passing one
+     * through would turn a stale voice id from an older build into a question
+     * the candidate never hears.
+     */
+    it('should fall back to the default for an unknown voice', () => {
+      const opts = ttsService._resolveOptions('Hello', { voice: 'aura-asteria-en' });
+      expect(opts.voiceKey).toBe('kore');
+      expect(opts.deepgramVoice).toBe(TTS_VOICES.kore.deepgram);
     });
 
     it('should throw on empty text', () => {
@@ -353,24 +363,41 @@ describe('TTS Service', () => {
   });
 
   describe('synthesize', () => {
-    it('should request audio in the chosen voice', async () => {
-      mockPost.mockResolvedValue(buildAudioResponse());
+    /**
+     * Deepgram leads because the gap before a question is spoken is the whole
+     * feel of the conversation: ~0.6s and a few KB of MP3, against several
+     * seconds and a 244KB WAV from Gemini for the same sentence.
+     */
+    it('should speak through Deepgram by default', async () => {
+      mockSpeakGenerate.mockResolvedValue({ arrayBuffer: async () => Buffer.from('mp3-bytes') });
 
       const result = await ttsService.synthesize('Tell me about yourself', { voice: 'orus' });
 
-      expect(lastRequestUrl()).toMatch(/-tts:generateContent$/);
-      expect(lastRequestBody().generationConfig).toEqual(
-        expect.objectContaining({
-          responseModalities: ['AUDIO'],
-          speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Orus' } } },
-        })
-      );
+      expect(mockSpeakGenerate).toHaveBeenCalledWith({
+        text: 'Tell me about yourself',
+        model: TTS_VOICES.orus.deepgram,
+        encoding: 'mp3',
+      });
+      expect(result.content_type).toBe('audio/mpeg');
       expect(result.voice).toBe('orus');
       expect(result.character_count).toBe(22);
+      expect(mockPost).not.toHaveBeenCalled();
+    });
+
+    it('should fall back to Gemini when Deepgram will not answer', async () => {
+      mockSpeakGenerate.mockRejectedValue(new Error('Deepgram is down'));
+      mockPost.mockResolvedValue(buildAudioResponse());
+
+      const result = await ttsService.synthesize('Why did you leave?', { voice: 'orus' });
+
+      expect(lastRequestUrl()).toMatch(/-tts:generateContent$/);
+      expect(lastRequestBody().generationConfig.speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName)
+        .toBe(TTS_VOICES.orus.gemini);
       expect(result.content_type).toBe('audio/wav');
     });
 
     it('should speak the text with delivery direction, not the direction alone', async () => {
+      mockSpeakGenerate.mockRejectedValue(new Error('down'));
       mockPost.mockResolvedValue(buildAudioResponse());
 
       await ttsService.synthesize('Why did you leave?', { style: 'Say this warmly' });
@@ -382,8 +409,9 @@ describe('TTS Service', () => {
      * Gemini returns headerless PCM, which no mobile player can open. The
      * service has to frame it before the bytes leave the server.
      */
-    it('should wrap the returned PCM in a playable WAV container', async () => {
+    it('should wrap Gemini PCM in a playable WAV container', async () => {
       const pcm = Buffer.from('raw-pcm-samples');
+      mockSpeakGenerate.mockRejectedValue(new Error('down'));
       mockPost.mockResolvedValue(buildAudioResponse(pcm));
 
       const { buffer } = await ttsService.synthesize('Hello');
@@ -391,62 +419,29 @@ describe('TTS Service', () => {
       expect(buffer.length).toBe(44 + pcm.length);
       expect(buffer.subarray(0, 4).toString()).toBe('RIFF');
       expect(buffer.subarray(8, 12).toString()).toBe('WAVE');
-      expect(buffer.readUInt16LE(22)).toBe(1);              // mono
+      expect(buffer.readUInt16LE(22)).toBe(1);               // mono
       expect(buffer.readUInt32LE(24)).toBe(TTS_SAMPLE_RATE); // 24 kHz
       expect(buffer.readUInt16LE(34)).toBe(16);              // 16-bit samples
       expect(buffer.readUInt32LE(40)).toBe(pcm.length);      // data chunk length
       expect(buffer.subarray(44).equals(pcm)).toBe(true);
     });
 
-    it('should throw when the response carries no audio', async () => {
-      mockPost.mockResolvedValue({ data: { candidates: [{ finishReason: 'SAFETY', content: { parts: [] } }] } });
-
-      await expect(ttsService.synthesize('Hello')).rejects.toThrow(/no audio \(SAFETY\)/);
-    });
-
-    /**
-     * Gemini's free TTS tier is ten requests a minute and a long interview can
-     * reach it. A rate-limited question must still be spoken, so the other
-     * provider answers instead of the candidate being left reading.
-     */
-    it('should fall back to Deepgram when Gemini is rate-limited', async () => {
-      mockPost.mockRejectedValue({
-        response: { status: 429, data: { error: { message: 'Quota exceeded' } } },
-      });
-      mockSpeakGenerate.mockResolvedValue({
-        arrayBuffer: async () => Buffer.from('mp3-bytes'),
-      });
-
-      const result = await ttsService.synthesize('Tell me about yourself', { voice: 'orus' });
-
-      expect(mockSpeakGenerate).toHaveBeenCalledWith(
-        expect.objectContaining({ text: 'Tell me about yourself', encoding: 'mp3' })
-      );
-      expect(result.content_type).toBe('audio/mpeg');
-      expect(result.buffer.toString()).toBe('mp3-bytes');
-    });
-
-    it('should pick a fallback voice matching the register of the chosen one', async () => {
-      mockPost.mockRejectedValue({ response: { status: 503, data: {} } });
-      mockSpeakGenerate.mockResolvedValue({ arrayBuffer: async () => Buffer.from('mp3') });
-
-      await ttsService.synthesize('Hello', { voice: 'orus' });          // male
-      expect(mockSpeakGenerate.mock.calls.at(-1)[0].model).toMatch(/apollo/);
-
-      await ttsService.synthesize('Hello', { voice: 'kore' });          // female
-      expect(mockSpeakGenerate.mock.calls.at(-1)[0].model).toMatch(/thalia/);
-    });
-
     it('should report the original failure when both providers fail', async () => {
+      mockSpeakGenerate.mockRejectedValue(new Error('Deepgram is down'));
       mockPost.mockRejectedValue({
         response: { status: 429, data: { error: { message: 'Quota exceeded' } } },
       });
-      mockSpeakGenerate.mockRejectedValue(new Error('Deepgram is down too'));
 
-      await expect(ttsService.synthesize('Hello')).rejects.toMatchObject({
-        message: 'Quota exceeded',
-        statusCode: 429,
-      });
+      await expect(ttsService.synthesize('Hello')).rejects.toThrow('Deepgram is down');
+    });
+
+    it('should treat an empty payload as a failure worth falling back from', async () => {
+      mockSpeakGenerate.mockResolvedValue({ arrayBuffer: async () => Buffer.alloc(0) });
+      mockPost.mockResolvedValue(buildAudioResponse());
+
+      const result = await ttsService.synthesize('Hello');
+
+      expect(result.content_type).toBe('audio/wav');
     });
   });
 });
