@@ -1,0 +1,322 @@
+import WebSocket from 'ws';
+import {
+  AGENT_ENDPOINT,
+  AGENT_IDLE_TIMEOUT_MS,
+  AGENT_MAX_SESSION_MS,
+} from '../../config/deepgram-agent.js';
+import { info, warn, error as logError } from '../../core/errors/logger.js';
+import { addQuestionToSession, completeSession, submitAnswer } from '../interviews/interview.service.js';
+import { buildAgentSettings, buildClosingMessages } from './agent.settings.js';
+import { TranscriptPairer, classifyQuestion } from './agent.transcript.js';
+
+/**
+ * One live interview, bridging the phone to Deepgram's Voice Agent.
+ *
+ * ── Why the audio goes through this server at all ───────────────────────────
+ *
+ * The phone could talk to Deepgram directly and save a hop. It does not, for two
+ * reasons. First, that requires a credential on the device: either the account
+ * key, which must never ship in an app bundle, or a short-lived token, which
+ * this project's Deepgram key has no permission to mint (`/v1/auth/grant`
+ * returns 403 — the key is a restricted one). Second, and more importantly,
+ * something has to write the interview down. Only this server holds the Supabase
+ * credentials, and a transcript that exists solely on the phone is one dropped
+ * connection away from an interview the candidate can never be graded on.
+ *
+ * The hop costs one round trip to this server per audio frame. Against a
+ * measured ~2.4s from end-of-speech to the agent's reply, that is noise.
+ *
+ * ── What "writing it down" means here ───────────────────────────────────────
+ *
+ * Rows are written as the conversation happens, not at the end. A candidate who
+ * loses signal at question nine keeps nine graded answers instead of none.
+ */
+
+/** Frames the client sends us are raw PCM; anything text is a control message. */
+const isControlMessage = (data, isBinary) => !isBinary;
+
+export class AgentSession {
+  /**
+   * @param {object} deps
+   * @param {import('ws').WebSocket} deps.client - socket to the phone
+   * @param {string} deps.sessionId
+   * @param {string} deps.userId
+   * @param {object} deps.jobData - the session's job description row
+   * @param {object} [deps.options] - mode, voice, maxQuestions, candidateName
+   */
+  constructor({ client, sessionId, userId, jobData, options = {} }) {
+    this.client = client;
+    this.sessionId = sessionId;
+    this.userId = userId;
+    this.jobData = jobData;
+    this.options = options;
+    this.maxQuestions = options.maxQuestions || 15;
+
+    this.upstream = null;
+    this.pairer = new TranscriptPairer();
+    this.askedCount = 0;
+    this.closing = false;
+    this.finished = false;
+    this.startedAt = Date.now();
+
+    /**
+     * Writes are queued rather than awaited inline. Supabase inserts take
+     * hundreds of milliseconds and the agent does not wait for us; blocking the
+     * message handler on a write would stall the audio relay behind the
+     * database, which the candidate would hear as a stutter.
+     */
+    this.writeQueue = Promise.resolve();
+
+    this.idleTimer = null;
+    this.maxTimer = null;
+  }
+
+  // ── Lifecycle ─────────────────────────────────────────────────────────────
+
+  start() {
+    const key = process.env.DEEPGRAM_API_KEY;
+    if (!key) {
+      this.failClient('Voice interviews are not configured on this server.');
+      return;
+    }
+
+    this.upstream = new WebSocket(AGENT_ENDPOINT, ['token', key]);
+
+    this.upstream.on('open', () => this.onUpstreamOpen());
+    this.upstream.on('message', (data, isBinary) => this.onUpstreamMessage(data, isBinary));
+    this.upstream.on('error', (err) => {
+      logError('Voice agent upstream error:', err);
+      this.failClient('The interviewer connection dropped. Your answers so far are saved.');
+    });
+    this.upstream.on('close', () => this.finish('upstream_closed'));
+
+    this.client.on('message', (data, isBinary) => this.onClientMessage(data, isBinary));
+    this.client.on('close', () => this.finish('client_closed'));
+    this.client.on('error', () => this.finish('client_error'));
+
+    this.resetIdleTimer();
+    this.maxTimer = setTimeout(() => this.beginClosing('time_limit'), AGENT_MAX_SESSION_MS);
+  }
+
+  onUpstreamOpen() {
+    this.upstream.send(
+      JSON.stringify(
+        buildAgentSettings(this.jobData, {
+          mode: this.options.mode,
+          voice: this.options.voice,
+          maxQuestions: this.maxQuestions,
+          candidateName: this.options.candidateName,
+        })
+      )
+    );
+  }
+
+  // ── Phone → Deepgram ──────────────────────────────────────────────────────
+
+  onClientMessage(data, isBinary) {
+    if (isControlMessage(data, isBinary)) {
+      let msg;
+      try {
+        msg = JSON.parse(data.toString());
+      } catch {
+        return;
+      }
+
+      // The candidate tapped End. Close through the agent so they hear a
+      // sign-off rather than the call simply vanishing.
+      if (msg.type === 'end') this.beginClosing('ended_early');
+      return;
+    }
+
+    this.resetIdleTimer();
+    if (this.upstream?.readyState === WebSocket.OPEN && !this.closing) {
+      this.upstream.send(data, { binary: true });
+    }
+  }
+
+  // ── Deepgram → phone ──────────────────────────────────────────────────────
+
+  onUpstreamMessage(data, isBinary) {
+    if (isBinary) {
+      // The agent's voice. Straight through — every millisecond spent here is
+      // heard as a gap in the middle of a sentence.
+      this.sendAudio(data);
+      return;
+    }
+
+    let msg;
+    try {
+      msg = JSON.parse(data.toString());
+    } catch {
+      return;
+    }
+
+    switch (msg.type) {
+      case 'SettingsApplied':
+        this.sendEvent({ type: 'ready', maxQuestions: this.maxQuestions });
+        break;
+
+      case 'ConversationText':
+        this.onConversationText(msg.role, msg.content);
+        break;
+
+      case 'UserStartedSpeaking':
+        // Barge-in: the candidate has cut in, so whatever of the agent's reply
+        // is already queued on the device must be dropped or they will be
+        // talking over a sentence that is no longer relevant.
+        this.sendEvent({ type: 'user_speaking' });
+        break;
+
+      case 'AgentAudioDone':
+        this.sendEvent({ type: 'agent_done' });
+        // The closing line has finished playing; now it is safe to hang up.
+        if (this.closing) this.finish('closed');
+        break;
+
+      case 'Error':
+        warn(`Voice agent error: ${msg.description || msg.message || 'unknown'}`);
+        this.failClient('The interviewer ran into a problem. Your answers so far are saved.');
+        break;
+
+      default:
+        // Welcome, History, LatencyReport and friends: useful upstream, noise
+        // to the phone.
+        break;
+    }
+  }
+
+  /**
+   * A completed exchange means a question the candidate actually answered.
+   * Both halves are written together so the pair can never come apart.
+   */
+  onConversationText(role, content) {
+    this.sendEvent({ type: 'transcript', role, content });
+
+    const exchange = this.pairer.add(role, content);
+    if (!exchange) return;
+
+    this.askedCount += 1;
+    this.sendEvent({ type: 'progress', asked: this.askedCount, maxQuestions: this.maxQuestions });
+    this.persistExchange(exchange);
+
+    if (this.askedCount >= this.maxQuestions) this.beginClosing('limit');
+  }
+
+  persistExchange({ question, answer }) {
+    this.writeQueue = this.writeQueue
+      .then(async () => {
+        const row = await addQuestionToSession(this.sessionId, this.userId, {
+          question_text: question,
+          question_type: classifyQuestion(question),
+          difficulty_level: 'medium',
+          ideal_answer_guidelines: null,
+        });
+
+        await submitAnswer(this.sessionId, row.id, this.userId, { answer_text: answer });
+      })
+      .catch((err) => {
+        // A failed write must not take the interview down with it. The
+        // conversation is still happening and the remaining answers are still
+        // worth having.
+        logError('Could not store an interview exchange:', err);
+      });
+  }
+
+  // ── Ending ────────────────────────────────────────────────────────────────
+
+  /**
+   * Ask the interviewer to sign off, then wait for it to finish speaking.
+   *
+   * Not the same as hanging up: cutting the socket the moment the cap is hit
+   * would clip the agent mid-sentence, and the candidate would be left unsure
+   * whether the interview ended or broke.
+   */
+  beginClosing(reason) {
+    if (this.closing || this.finished) return;
+    this.closing = true;
+
+    info(`Voice interview ${this.sessionId} closing (${reason})`);
+    this.sendEvent({ type: 'closing', reason });
+
+    if (this.upstream?.readyState === WebSocket.OPEN) {
+      for (const message of buildClosingMessages()) {
+        this.upstream.send(JSON.stringify(message));
+      }
+      // Backstop: if the sign-off never plays, the interview still ends.
+      setTimeout(() => this.finish('closing_timeout'), 15_000);
+      return;
+    }
+
+    this.finish(reason);
+  }
+
+  async finish(reason) {
+    if (this.finished) return;
+    this.finished = true;
+
+    clearTimeout(this.idleTimer);
+    clearTimeout(this.maxTimer);
+
+    // Anything the candidate said after the last question still counts.
+    const trailing = this.pairer.flush();
+    if (trailing) {
+      this.askedCount += 1;
+      this.persistExchange(trailing);
+    }
+
+    try {
+      this.upstream?.close();
+    } catch {
+      /* already gone */
+    }
+
+    // Every queued write has to land before the session is marked complete,
+    // or grading runs against a transcript that is still being written.
+    try {
+      await this.writeQueue;
+    } catch {
+      /* individual failures are already logged */
+    }
+
+    try {
+      await completeSession(this.sessionId, this.userId);
+    } catch (err) {
+      // Already complete, or the status flip failed. The answers are stored
+      // either way, and history reconciles the counters.
+      warn(`Could not complete session ${this.sessionId}: ${err.message}`);
+    }
+
+    info(`Voice interview ${this.sessionId} finished (${reason}) with ${this.askedCount} exchanges`);
+    this.sendEvent({ type: 'done', reason, asked: this.askedCount });
+
+    try {
+      this.client.close();
+    } catch {
+      /* already gone */
+    }
+  }
+
+  resetIdleTimer() {
+    clearTimeout(this.idleTimer);
+    this.idleTimer = setTimeout(() => this.beginClosing('idle'), AGENT_IDLE_TIMEOUT_MS);
+  }
+
+  // ── Talking to the phone ──────────────────────────────────────────────────
+
+  sendEvent(payload) {
+    if (this.client.readyState !== WebSocket.OPEN) return;
+    this.client.send(JSON.stringify(payload));
+  }
+
+  sendAudio(chunk) {
+    if (this.client.readyState !== WebSocket.OPEN) return;
+    this.client.send(chunk, { binary: true });
+  }
+
+  failClient(message) {
+    this.sendEvent({ type: 'error', message });
+    this.finish('error');
+  }
+}
+
+export default { AgentSession };
