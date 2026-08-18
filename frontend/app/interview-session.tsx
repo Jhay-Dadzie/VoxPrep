@@ -1,27 +1,20 @@
-import React, { useEffect, useState } from 'react'
-import { StyleSheet, View, ScrollView, Image, Pressable, TextInput, ActivityIndicator } from 'react-native'
+import React from 'react'
+import { StyleSheet, View, ScrollView, Image, Pressable, ActivityIndicator } from 'react-native'
 import { LinearGradient } from 'expo-linear-gradient'
 import { Ionicons } from '@expo/vector-icons'
 import { router, useLocalSearchParams } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { ThemedText } from '@/components/themed-text'
+import { VoiceWave } from '@/components/voice-wave'
 import { useColorScheme } from '@/hooks/use-color-scheme'
 import { useMode } from '@/hooks/mode-context'
 import { useInterviewer } from '@/hooks/interviewer-context'
 import { avatarSource, shortName } from '@/constants/interviewers'
 import { Colors } from '@/constants/theme'
-import { useInterviewSession } from '@/hooks/use-interview-session'
+import { useAgentSession } from '@/hooks/use-agent-session'
 import { clearPreparedSession, getPreparedSession } from '@/lib/prepared-session'
-import type { InterviewQuestion } from '@/types/interview'
 
 const pad = (n: number) => n.toString().padStart(2, '0')
-
-const TYPE_LABEL: Record<InterviewQuestion['type'], string> = {
-  behavioral: 'BEHAVIORAL QUESTION',
-  technical: 'TECHNICAL QUESTION',
-  situational: 'SITUATIONAL QUESTION',
-  general: 'GENERAL QUESTION',
-}
 
 export default function InterviewSession() {
   const colorScheme = useColorScheme()
@@ -64,48 +57,52 @@ function RunningSession({
   modeId: ReturnType<typeof useMode>['modeId']
   interviewer: ReturnType<typeof useInterviewer>['interviewer']
 }) {
-  const [typed, setTyped] = useState('')
-
-  // Panelists take turns so a multi-voice panel actually sounds like one.
+  // One voice holds the call. A panel that swapped speakers mid-conversation
+  // would mean reconfiguring the agent between turns, which is the round trip
+  // this whole architecture exists to avoid.
   const panelist = interviewer.members[0]
 
-  // The setup screen leaves the session's question cap here; a session reopened
-  // without it falls back to the server's own ceiling.
   const prepared = getPreparedSession(sessionId)
 
-  const session = useInterviewSession({
+  const session = useAgentSession({
     sessionId,
     mode: modeId,
     voice: panelist?.voiceId,
     maxQuestions: prepared?.maxQuestions,
     onFinished: () => {
       clearPreparedSession()
-      // The history detail screen renders the real graded session; the results
-      // tab is still placeholder content.
       router.replace({ pathname: '/history/[id]', params: { id: sessionId } })
     },
   })
 
-  const position = Math.max(1, session.askedCount)
-  const speaker = interviewer.members[(position - 1) % interviewer.members.length] ?? panelist
   const mm = Math.floor(session.elapsedSeconds / 60)
   const ss = session.elapsedSeconds % 60
-  const busy =
-    session.phase === 'submitting' ||
-    session.phase === 'thinking' ||
-    session.phase === 'finishing' ||
-    session.phase === 'grading'
+  const position = Math.max(1, session.askedCount)
+  const speakerName = panelist ? shortName(panelist) : 'The interviewer'
 
-  useEffect(() => {
-    setTyped('')
-  }, [session.question?.id])
+  const statusLabel =
+    session.phase === 'connecting'
+      ? 'Connecting you to the interviewer...'
+      : session.phase === 'closing'
+        ? `${speakerName} is wrapping up...`
+        : session.phase === 'grading'
+          ? 'Assessing the whole interview — this takes a moment...'
+          : session.phase === 'error'
+            ? 'The interview is paused.'
+            : session.isAgentSpeaking
+              ? `${speakerName} is speaking...`
+              : copy.listeningLabel
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.card }} edges={['top']}>
       <View style={[styles.header, { backgroundColor: colors.card, borderBottomColor: colors.border }]}>
         <ThemedText style={[styles.brand, { color: colors.tint }]}>VoxPrep</ThemedText>
         <View style={{ flex: 1 }} />
-        <Pressable hitSlop={10} onPress={session.endEarly} disabled={session.phase === 'finishing' || session.phase === 'grading'}>
+        <Pressable
+          hitSlop={10}
+          onPress={session.endEarly}
+          disabled={session.phase === 'closing' || session.phase === 'grading' || session.phase === 'done'}
+        >
           <ThemedText style={{ color: colors.subtext, fontWeight: '600' }}>End</ThemedText>
         </Pressable>
       </View>
@@ -114,11 +111,10 @@ function RunningSession({
         style={{ backgroundColor: colors.background }}
         contentContainerStyle={{ padding: 20, paddingBottom: 32 }}
         showsVerticalScrollIndicator={false}
-        keyboardShouldPersistTaps="handled"
       >
         <View style={styles.topRow}>
           <View style={[styles.timerPill, { backgroundColor: colors.card }]}>
-            <View style={[styles.recDot, { opacity: session.phase === 'answering' ? 1 : 0.3 }]} />
+            <View style={[styles.recDot, { opacity: session.isListening ? 1 : 0.3 }]} />
             <ThemedText style={[styles.timerText, { color: colors.oppositeColor }]}>
               {pad(mm)}:{pad(ss)}
             </ThemedText>
@@ -144,148 +140,77 @@ function RunningSession({
           <View style={styles.questionInner}>
             <View style={[styles.tag, { backgroundColor: colors.brandSoft }]}>
               <ThemedText style={[styles.tagText, { color: colors.tint }]}>
-                {session.question ? TYPE_LABEL[session.question.type] : copy.questionTag}
+                {session.isAgentSpeaking ? 'SPEAKING NOW' : copy.questionTag}
               </ThemedText>
             </View>
 
             <ThemedText style={[styles.questionText, { color: colors.oppositeColor }]}>
-              {session.question?.questionText ??
-                (session.phase === 'error'
-                  ? ''
-                  : `${speaker ? shortName(speaker) : 'The interviewer'} is preparing your first question...`)}
+              {session.currentQuestion ??
+                (session.phase === 'error' ? '' : `${speakerName} is joining the call...`)}
             </ThemedText>
           </View>
         </View>
 
-        <Pressable
-          style={[
-            styles.replayBtn,
-            {
-              borderColor: colors.tint,
-              backgroundColor: colors.card,
-              marginTop: 16,
-              opacity: session.canReplay ? 1 : 0.5,
-            },
-          ]}
-          onPress={session.replayQuestion}
-          disabled={!session.canReplay || session.isReplaying}
-        >
-          {session.isReplaying ? (
-            <ActivityIndicator size="small" color={colors.tint} />
-          ) : (
-            <Ionicons name="refresh" size={16} color={colors.tint} />
-          )}
-          <ThemedText style={{ color: colors.tint, fontWeight: '700' }}>
-            {session.isReplaying ? 'Loading...' : copy.replayLabel}
-          </ThemedText>
-        </Pressable>
-
         <View style={[styles.aiCard, { backgroundColor: colors.card }]}>
           <View style={styles.aiAvatarWrap}>
-            {speaker ? <Image source={avatarSource(speaker)} style={styles.aiAvatar} /> : null}
+            {panelist ? <Image source={avatarSource(panelist)} style={styles.aiAvatar} /> : null}
             <View
               style={[
                 styles.statusDot,
-                { borderColor: colors.card, backgroundColor: session.phase === 'answering' ? '#22C55E' : '#F59E0B' },
+                { borderColor: colors.card, backgroundColor: session.isListening ? '#22C55E' : '#F59E0B' },
               ]}
             />
           </View>
 
-          <ThemedText style={[styles.aiLabel, { color: colors.oppositeColor }]}>
-            {session.phase === 'thinking'
-              ? `${speaker ? shortName(speaker) : 'The interviewer'} is thinking about what to ask next...`
-              : session.phase === 'asking'
-                ? `${speaker ? shortName(speaker) : 'The interviewer'} is speaking...`
-                : session.phase === 'answering'
-                  ? session.micAvailable
-                    ? copy.listeningLabel
-                    : 'Microphone unavailable — type your answer'
-                  : session.phase === 'submitting'
-                    ? 'Transcribing your answer...'
-                    : session.phase === 'finishing'
-                      ? session.closingRemark ?? 'Wrapping up...'
-                      : session.phase === 'grading'
-                        ? 'Assessing the whole interview — this takes a moment...'
-                        : session.phase === 'error'
-                          ? 'The interview is paused.'
-                          : 'Getting ready...'}
-          </ThemedText>
+          <ThemedText style={[styles.aiLabel, { color: colors.oppositeColor }]}>{statusLabel}</ThemedText>
 
-          <View style={styles.miniBars}>
-            {session.bars.map((h, i) => (
-              <View key={i} style={{ width: 3, height: h, borderRadius: 2, backgroundColor: colors.tint }} />
-            ))}
-          </View>
+          {/* The wave tracks real microphone level, so it only moves when the
+              mic is actually live — a wave that animated regardless would say
+              "you are being heard" at the exact moment that might be false. */}
+          <VoiceWave
+            levels={session.levels}
+            color={session.isListening ? colors.tint : colors.border}
+            idle={!session.isListening}
+          />
         </View>
 
         {session.error ? (
           <View style={[styles.errorBox, { backgroundColor: colors.brandSoft }]}>
             <Ionicons name="alert-circle" size={16} color="#EF4444" />
-            <ThemedText style={{ color: colors.oppositeColor, fontSize: 13, flex: 1 }}>{session.error}</ThemedText>
+            <ThemedText style={{ color: colors.oppositeColor, fontSize: 13, flex: 1 }}>
+              {session.error}
+            </ThemedText>
           </View>
         ) : null}
 
         {session.phase === 'error' ? (
-          <>
-            <Pressable style={[styles.stopBtn, { backgroundColor: colors.tint }]} onPress={session.retry}>
-              <Ionicons name="refresh" size={18} color="#fff" />
-              <ThemedText style={styles.stopBtnText}>Try again</ThemedText>
-            </Pressable>
-            <Pressable
-              style={[styles.replayBtn, { borderColor: colors.border, backgroundColor: colors.card }]}
-              onPress={session.endEarly}
-            >
-              <ThemedText style={{ color: colors.subtext, fontWeight: '700' }}>
-                End here and see my results
-              </ThemedText>
-            </Pressable>
-          </>
-        ) : session.needsTypedAnswer && session.phase === 'answering' ? (
-          <View style={[styles.typedCard, { backgroundColor: colors.inputBg }]}>
-            <ThemedText style={[styles.transcriptLabel, { color: colors.subtext }]}>TYPE YOUR ANSWER</ThemedText>
-            <TextInput
-              multiline
-              value={typed}
-              onChangeText={setTyped}
-              placeholder="Type what you would have said..."
-              placeholderTextColor={colors.muted}
-              style={[styles.typedInput, { color: colors.oppositeColor }]}
-              textAlignVertical="top"
-            />
-            <Pressable
-              style={[styles.stopBtn, { backgroundColor: typed.trim() ? colors.tint : colors.border, marginBottom: 0 }]}
-              onPress={() => session.submitTypedAnswer(typed)}
-              disabled={!typed.trim() || busy}
-            >
-              <ThemedText style={styles.stopBtnText}>Submit Answer</ThemedText>
-            </Pressable>
-          </View>
-        ) : (
-          <Pressable
-            style={[styles.stopBtn, { backgroundColor: session.phase === 'answering' ? colors.tint : colors.border }]}
-            onPress={session.submitAnswer}
-            disabled={session.phase !== 'answering' || busy}
-          >
-            {busy ? (
-              <ActivityIndicator color="#fff" size="small" />
-            ) : (
-              <Ionicons name="checkmark-circle" size={18} color="#fff" />
-            )}
-            <ThemedText style={styles.stopBtnText}>
-              {busy ? 'Submitting...' : copy.submitLabel}
-            </ThemedText>
+          <Pressable style={[styles.stopBtn, { backgroundColor: colors.tint }]} onPress={session.abandon}>
+            <Ionicons name="documents-outline" size={18} color="#fff" />
+            <ThemedText style={styles.stopBtnText}>End here and see my results</ThemedText>
           </Pressable>
-        )}
+        ) : null}
 
-        {session.transcript ? (
+        {/* The conversation as it happens. In a voice interview this is the
+            only record the candidate has of what was actually said. */}
+        {session.transcript.length > 0 ? (
           <View style={[styles.transcriptCard, { backgroundColor: colors.inputBg }]}>
             <View style={styles.transcriptHeader}>
-              <Ionicons name="reorder-three" size={16} color={colors.subtext} />
-              <ThemedText style={[styles.transcriptLabel, { color: colors.subtext }]}>LAST ANSWER</ThemedText>
+              <Ionicons name="chatbubbles-outline" size={16} color={colors.subtext} />
+              <ThemedText style={[styles.transcriptLabel, { color: colors.subtext }]}>
+                CONVERSATION
+              </ThemedText>
             </View>
-            <ThemedText style={[styles.transcriptText, { color: colors.oppositeColor }]}>
-              {session.transcript}
-            </ThemedText>
+
+            {session.transcript.map((line, index) => (
+              <View key={`${index}-${line.role}`} style={styles.turn}>
+                <ThemedText style={[styles.turnWho, { color: line.role === 'user' ? colors.tint : colors.subtext }]}>
+                  {line.role === 'user' ? 'You' : speakerName}
+                </ThemedText>
+                <ThemedText style={[styles.turnText, { color: colors.oppositeColor }]}>
+                  {line.content}
+                </ThemedText>
+              </View>
+            ))}
           </View>
         ) : null}
       </ScrollView>
@@ -307,9 +232,14 @@ function SessionMessage({
   return (
     <SafeAreaView style={[styles.messageRoot, { backgroundColor: colors.background }]}>
       {busy ? <ActivityIndicator color={colors.tint} size="large" /> : null}
-      <ThemedText style={{ color: colors.oppositeColor, textAlign: 'center', marginTop: 16 }}>{message}</ThemedText>
+      <ThemedText style={{ color: colors.oppositeColor, textAlign: 'center', marginTop: 16 }}>
+        {message}
+      </ThemedText>
       {onBack ? (
-        <Pressable style={[styles.stopBtn, { backgroundColor: colors.tint, marginTop: 24, paddingHorizontal: 32 }]} onPress={onBack}>
+        <Pressable
+          style={[styles.stopBtn, { backgroundColor: colors.tint, marginTop: 24, paddingHorizontal: 32 }]}
+          onPress={onBack}
+        >
           <ThemedText style={styles.stopBtnText}>Back to Practice</ThemedText>
         </Pressable>
       ) : null}
@@ -331,11 +261,6 @@ const styles = StyleSheet.create({
   qLabel: { fontSize: 11, fontWeight: '700', letterSpacing: 0.5 },
   qVal: { fontWeight: '700', fontSize: 14 },
 
-  replayBtn: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
-    borderRadius: 999, borderWidth: 1, paddingVertical: 13, marginBottom: 14,
-  },
-
   questionCard: { borderRadius: 14, overflow: 'hidden', flexDirection: 'row', marginTop: 2 },
   questionAccent: { width: 6 },
   questionInner: { flex: 1, padding: 16 },
@@ -350,8 +275,7 @@ const styles = StyleSheet.create({
     position: 'absolute', right: 4, bottom: 4,
     width: 18, height: 18, borderRadius: 9, borderWidth: 3,
   },
-  aiLabel: { fontWeight: '600', fontSize: 14, marginBottom: 8, textAlign: 'center' },
-  miniBars: { flexDirection: 'row', alignItems: 'center', gap: 3, height: 42 },
+  aiLabel: { fontWeight: '600', fontSize: 14, marginBottom: 10, textAlign: 'center' },
 
   errorBox: { flexDirection: 'row', alignItems: 'center', gap: 8, padding: 12, borderRadius: 10, marginBottom: 14 },
 
@@ -361,11 +285,10 @@ const styles = StyleSheet.create({
   },
   stopBtnText: { color: '#fff', fontWeight: '700', fontSize: 15 },
 
-  typedCard: { borderRadius: 12, padding: 16, marginBottom: 16, gap: 10 },
-  typedInput: { minHeight: 110, fontSize: 14, lineHeight: 20 },
-
   transcriptCard: { borderRadius: 12, padding: 16 },
   transcriptHeader: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 10 },
   transcriptLabel: { fontSize: 11, fontWeight: '700', letterSpacing: 0.5 },
-  transcriptText: { fontSize: 14, lineHeight: 22 },
+  turn: { marginBottom: 12 },
+  turnWho: { fontSize: 11, fontWeight: '700', letterSpacing: 0.5, marginBottom: 3 },
+  turnText: { fontSize: 14, lineHeight: 21 },
 })

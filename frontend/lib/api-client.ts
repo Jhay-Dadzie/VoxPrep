@@ -48,6 +48,18 @@ const API_BASE_URL =
 
 console.log('API Base URL:', API_BASE_URL)
 
+/**
+ * WebSocket URL for the live voice interview.
+ *
+ * Derived from the REST base rather than configured separately, so the dev-time
+ * host detection above — which follows the Expo dev server when DHCP hands out
+ * a new lease — applies to the socket too. A second setting here would go stale
+ * the first time the laptop's IP changed, and the failure would look like the
+ * interviewer never speaking.
+ */
+export const agentSocketUrl = (): string =>
+  `${API_BASE_URL.replace(/^http/, 'ws')}/interviews/agent`
+
 const apiClient: AxiosInstance = axios.create({
   baseURL: API_BASE_URL,
   timeout: 15000,

@@ -23,8 +23,37 @@
 
 export const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-3.6-flash";
 
+/**
+ * Split a comma-separated env override into a model list.
+ * Blank entries are dropped so a trailing comma cannot produce an empty id.
+ */
+const modelList = (value, fallback) =>
+  (value ? value.split(",") : fallback).map((id) => id.trim()).filter(Boolean);
+
+/**
+ * Stand-ins to try when the primary model will not answer.
+ *
+ * Free-tier quota is per model, so the most likely failure in a live interview
+ * is a 429 on the model doing the most work — and the interviewer's model is
+ * asked once per turn. Rolling onto a different model costs a little
+ * consistency in phrasing and saves the session, which is the right trade
+ * mid-conversation.
+ *
+ * The two chains point at each other deliberately: whichever model is busy,
+ * the other is idle.
+ */
+export const GEMINI_MODEL_FALLBACKS = modelList(
+  process.env.GEMINI_MODEL_FALLBACKS,
+  ["gemini-2.5-flash", "gemini-flash-latest"]
+);
+
+export const GEMINI_ASSESSMENT_FALLBACKS = modelList(
+  process.env.GEMINI_ASSESSMENT_FALLBACKS,
+  ["gemini-3.7-flash", "gemini-flash-latest"]
+);
+
 /** Speech generation. Only the *-tts models accept responseModalities: ["AUDIO"]. */
-export const GEMINI_TTS_MODEL = process.env.GEMINI_TTS_MODEL || "gemini-2.5-flash-preview-tts";
+export const GEMINI_TTS_MODEL = process.env.GEMINI_TTS_MODEL || "gemini-3.1-flash-tts";
 
 /**
  * Grading. Deliberately a different model from the interviewer so that a

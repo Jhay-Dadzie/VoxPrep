@@ -6,6 +6,7 @@
 
 import 'dotenv/config';
 import app from './app.js';
+import { attachAgentGateway } from './modules/agent/agent.gateway.js';
 import { info, error } from './core/errors/logger.js';
 
 const PORT = process.env.PORT || 3000;
@@ -41,6 +42,13 @@ const server = app.listen(PORT, () => {
   Press CTRL + C to stop the server
   `);
 });
+
+/**
+ * Live voice interviews share this HTTP server rather than running their own.
+ * One port is one firewall rule, one tunnel and one URL for the app to derive —
+ * and the app already knows how to find this one.
+ */
+attachAgentGateway(server);
 
 /**
  * Handle graceful shutdown

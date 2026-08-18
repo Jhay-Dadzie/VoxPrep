@@ -18,7 +18,7 @@
  */
 
 import { callGemini, parseJsonResponse } from '../ai/ai.service.js';
-import { GEMINI_ASSESSMENT_MODEL } from '../../config/gemini.js';
+import { GEMINI_ASSESSMENT_MODEL, GEMINI_ASSESSMENT_FALLBACKS } from '../../config/gemini.js';
 import {
   buildAssessmentSystemPrompt,
   buildAssessmentUserPrompt,
@@ -79,7 +79,10 @@ async function assessSession(input) {
   }
 
   const completion = await callGemini({
-    model: GEMINI_ASSESSMENT_MODEL,
+    // Grading happens once, at the end, with the user watching a spinner — so a
+    // rate-limited primary rolls onto the next model rather than costing them
+    // the results for an interview they have already sat through.
+    model: [GEMINI_ASSESSMENT_MODEL, ...GEMINI_ASSESSMENT_FALLBACKS],
     // Grading should be reproducible; sampling only adds variance between
     // regrades of the same unchanged answers.
     temperature: 0.2,

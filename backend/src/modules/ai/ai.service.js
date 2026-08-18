@@ -1,5 +1,11 @@
 import axios from "axios";
-import { GEMINI_API_KEY, GEMINI_ENDPOINT, GEMINI_MODEL } from "../../config/gemini.js";
+import {
+  GEMINI_API_KEY,
+  GEMINI_ENDPOINT,
+  GEMINI_MODEL,
+  GEMINI_MODEL_FALLBACKS,
+} from "../../config/gemini.js";
+import { warn } from "../../core/errors/logger.js";
 
 const stripCodeFences = (content) =>
   content
@@ -107,29 +113,22 @@ export const interviewTurnSchema = {
 };
 
 /**
- * Gemini chat completion wrapper
+ * Failures worth retrying on a different model rather than surfacing.
+ *
+ *   429 — the quota for THIS model is spent; another model has its own.
+ *   503 — that model is temporarily overloaded.
+ *   500 — transient server-side fault.
+ *   404 — Google retires models from new keys without notice, and the id is
+ *         only resolved at request time, so a dead model looks like this.
+ *
+ * Deliberately excluded: 400 (our request is malformed — every model will
+ * reject it) and 401/403 (the key is wrong — switching models cannot help).
  */
-export const callGemini = async ({
-  messages,
-  temperature = 0.7,
-  responseSchema,
-  responseMimeType = "application/json",
-  model = GEMINI_MODEL,
-}) => {
-  const generationConfig = {
-    temperature,
-    responseMimeType,
-  };
+const RETRYABLE_STATUS = new Set([429, 500, 503, 404]);
 
-  if (responseSchema) {
-    generationConfig.responseSchema = responseSchema;
-  }
-
+/** One generateContent call against one model. */
+const requestGemini = async ({ model, messages, generationConfig }) => {
   try {
-    if (!GEMINI_API_KEY) {
-      throw new Error("Missing Gemini API key");
-    }
-
     const response = await axios.post(
       `${GEMINI_ENDPOINT}/models/${model}:generateContent`,
       {
@@ -150,26 +149,90 @@ export const callGemini = async ({
 
     if (!text) {
       const reason = response.data?.promptFeedback?.blockReason || "empty response";
-      throw new Error(`Gemini returned no text (${reason})`);
+      const emptyError = new Error(`Gemini returned no text (${reason})`);
+      // An empty answer is not a model-capacity problem, so it is not retried
+      // across models — the same prompt would come back empty again.
+      emptyError.statusCode = 502;
+      throw emptyError;
     }
 
     return text;
   } catch (error) {
-    const apiError = error.response?.data?.error || error.response?.data || {};
-    const message =
-      apiError.message ||
-      error.response?.statusText ||
-      error.message ||
-      "Gemini API request failed";
-    const statusCode = error.response?.status || apiError.code || 500;
+    if (!error.response) throw error;
 
-    console.error("Gemini Error:", error.response?.data || error.message || error);
-
-    const surfacedError = new Error(message);
-    surfacedError.statusCode = statusCode;
-    surfacedError.details = error.response?.data || null;
-    throw surfacedError;
+    const apiError = error.response.data?.error || error.response.data || {};
+    const surfaced = new Error(
+      apiError.message || error.response.statusText || "Gemini API request failed"
+    );
+    surfaced.statusCode = error.response.status || apiError.code || 500;
+    surfaced.details = error.response.data || null;
+    throw surfaced;
   }
+};
+
+/**
+ * Gemini chat completion wrapper.
+ *
+ * Accepts either one model or a list. On a rate limit, an outage or a retired
+ * model it moves to the next candidate rather than failing — mid-interview, a
+ * question answered by a different model is a far better outcome than no
+ * question at all.
+ *
+ * @param {object}          params
+ * @param {string|string[]} [params.model] - model, or ordered candidates to try
+ */
+export const callGemini = async ({
+  messages,
+  temperature = 0.7,
+  responseSchema,
+  responseMimeType = "application/json",
+  model = [GEMINI_MODEL, ...GEMINI_MODEL_FALLBACKS],
+}) => {
+  if (!GEMINI_API_KEY) {
+    throw new Error("Missing Gemini API key");
+  }
+
+  const generationConfig = { temperature, responseMimeType };
+  if (responseSchema) {
+    generationConfig.responseSchema = responseSchema;
+  }
+
+  // De-duplicated so an env override that repeats the primary does not spend
+  // two attempts on the same exhausted quota.
+  const candidates = [...new Set((Array.isArray(model) ? model : [model]).filter(Boolean))];
+
+  if (candidates.length === 0) {
+    throw new Error("No Gemini model configured");
+  }
+
+  let lastError;
+
+  for (const [index, candidate] of candidates.entries()) {
+    try {
+      const text = await requestGemini({ model: candidate, messages, generationConfig });
+
+      if (index > 0) {
+        warn(`Gemini: "${candidate}" answered after ${index} model(s) declined`);
+      }
+
+      return text;
+    } catch (error) {
+      lastError = error;
+
+      const isLast = index === candidates.length - 1;
+      if (isLast || !RETRYABLE_STATUS.has(error.statusCode)) {
+        console.error("Gemini Error:", error.details || error.message || error);
+        throw error;
+      }
+
+      warn(
+        `Gemini model "${candidate}" unavailable (${error.statusCode}: ${error.message}); ` +
+        `trying "${candidates[index + 1]}"`
+      );
+    }
+  }
+
+  throw lastError;
 };
 
 export const callOpenAI = callGemini;
