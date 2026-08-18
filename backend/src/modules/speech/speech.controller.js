@@ -65,17 +65,18 @@ import { info, error as _error, warn } from '../../core/errors/logger.js';
  * @param {string} params.storagePath   - Raw storage path (for signed URL regeneration)
  * @returns {Promise<object|null>}
  */
-async function _createAudioResponseRow({ sessionId, questionId, userId, audioUrl, storagePath }) {
+async function _createAudioResponseRow({ sessionId, questionId, userId, audioUrl, storagePath, knownTranscript }) {
   try {
     const row = await responseService.submitResponse(
       sessionId,
       questionId,
       userId,
       {
-        // Placeholder text so the NOT NULL constraint is satisfied.
-        // Replaced with the real transcript in Phase 4. Readers treat a row
-        // still carrying it as unanswered — see hasRealAnswer.
-        transcribed_text:          PENDING_TRANSCRIPT,
+        // Whatever text the client already has, else a placeholder so the
+        // NOT NULL constraint is satisfied. Either way it is replaced with the
+        // server-side transcript in Phase 4. Readers treat a row still carrying
+        // the placeholder as unanswered — see hasRealAnswer.
+        transcribed_text:          knownTranscript?.trim() || PENDING_TRANSCRIPT,
         original_audio_url:        audioUrl,
         storage_path:              storagePath,
         response_duration_seconds: null,   // populated after STT
@@ -217,6 +218,7 @@ export const transcribeAudio = asyncHandler(async (req, res, next) => {
       userId:      req.user.id,
       audioUrl:    uploaded.url,
       storagePath: uploaded.path,
+      knownTranscript: value.transcript,
     });
   }
 
@@ -236,7 +238,8 @@ export const transcribeAudio = asyncHandler(async (req, res, next) => {
 
     // An empty transcript is a failure to hear the answer, not an answer of
     // nothing — treat it exactly like a transcription error so the client can
-    // offer a retype instead of advancing over a blank.
+    // offer a retype instead of advancing over a blank. A transcript the client
+    // supplied is not lost by this: it is already on the row.
     if (!transcriptionResult.transcript.trim()) {
       throw new Error('No intelligible speech was found in the recording');
     }

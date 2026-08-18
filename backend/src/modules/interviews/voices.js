@@ -11,7 +11,7 @@
  * Keys here must stay in sync with the voiceId values in interviewers.ts.
  */
 
-import { GEMINI_VOICES } from '../speech/tts.service.js';
+import { TTS_VOICES } from '../speech/tts.service.js';
 
 const VOICE_MAP = {
   // Female
@@ -44,7 +44,7 @@ export const resolveVoice = (voice) => {
 
   const key = voice.trim().toLowerCase();
   if (VOICE_MAP[key]) return VOICE_MAP[key];
-  if (GEMINI_VOICES[key]) return key;
+  if (TTS_VOICES[key]) return key;
 
   return DEFAULT_TTS_VOICE;
 };

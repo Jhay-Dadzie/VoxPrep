@@ -437,7 +437,14 @@ export const retakeSession = async (sessionId, userId) => {
  * Load everything one interviewer turn needs: the session, its source material,
  * and the conversation so far in order.
  */
-const loadTurnContext = async (sessionId, userId) => {
+/**
+ * Load a session with its job description and everything asked so far.
+ *
+ * Exported because the voice gateway needs exactly this — the source material to
+ * brief the interviewer with, and an ownership check it cannot forget to do,
+ * since a session belonging to someone else throws here.
+ */
+export const loadSessionContext = async (sessionId, userId) => {
   const supabase = getSupabase();
 
   const { data: session, error: sessionError } = await supabase
@@ -508,7 +515,7 @@ export const nextTurn = async (sessionId, userId, { mode = null, maxQuestions, c
   const supabase = getSupabase();
   const cap = Math.min(Number(maxQuestions) || MAX_SESSION_QUESTIONS, MAX_SESSION_QUESTIONS);
 
-  const { session, questions } = await loadTurnContext(sessionId, userId);
+  const { session, questions } = await loadSessionContext(sessionId, userId);
 
   if (session.status === 'completed') {
     throw new Error('This interview has already been completed');

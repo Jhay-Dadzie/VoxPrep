@@ -74,11 +74,21 @@ const transcribeFileSchema = Joi.object({
   diarize:      booleanDefault(false),
   utterances:   booleanDefault(false),
   /**
-   * How long the client recorded for. Gemini transcription returns no timing
-   * metadata, so the recorder's own measurement is the only duration available
-   * — without it, response_duration_seconds would be null for every answer.
+   * How long the client recorded for. Used only when the provider reports no
+   * duration of its own.
    */
   duration_seconds: Joi.number().min(0).max(7200).optional(),
+  /**
+   * A transcript the client already has.
+   *
+   * The live session transcribes on-device as the candidate speaks and submits
+   * that text immediately, then uploads the recording in the background. This
+   * carries the text it already knows, so the stored answer is never briefly
+   * replaced by a placeholder if the upload's own transcription then fails.
+   * Server-side transcription still runs and still wins when it succeeds — it
+   * is the more accurate of the two.
+   */
+  transcript: Joi.string().trim().max(20000).optional(),
 })
   // Require both or neither
   .and('session_id', 'question_id')
