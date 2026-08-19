@@ -71,7 +71,7 @@ function RunningSession({
     maxQuestions: prepared?.maxQuestions,
     onFinished: () => {
       clearPreparedSession()
-      router.replace({ pathname: '/history/[id]', params: { id: sessionId } })
+      router.replace({ pathname: '/(tabs)/results', params: { sessionId } })
     },
   })
 

@@ -1,61 +1,158 @@
-import React, { useState } from 'react'
-import { StyleSheet, View, ScrollView, Pressable } from 'react-native'
+import React, { useCallback, useMemo, useRef, useState } from 'react'
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, View } from 'react-native'
 import { LinearGradient } from 'expo-linear-gradient'
 import { Ionicons } from '@expo/vector-icons'
-import { router } from 'expo-router'
+import { router, useFocusEffect, useLocalSearchParams } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { ThemedText } from '@/components/themed-text'
 import { useColorScheme } from '@/hooks/use-color-scheme'
 import { Colors } from '@/constants/theme'
+import { historyService } from '@/services/history'
+import { interviewService } from '@/services/interview'
+import { setPreparedSession } from '@/lib/prepared-session'
+import { toAuthError } from '@/services/error-handler'
+import type { HistoryDetail, HistoryQuestion } from '@/types/history'
+import { formatDuration, formatScore, scoreBand, scoreToPercent } from '@/lib/format'
+import { feedbackInsights, toneBg, toneColor } from '@/lib/feedback-view'
 
-type Tone = 'success' | 'warning'
-type Question = {
-  n: string
-  title: string
-  meta: string
-  score: string
-  badge: string
-  tone: Tone
-  insight: string
-}
-
-const QUESTIONS: Question[] = [
-  {
-    n: '01',
-    title: '"Tell me about yourself and your background."',
-    meta: 'Behavioral Question • 2m 15s',
-    score: '9/10',
-    badge: 'Exceptional',
-    tone: 'success',
-    insight:
-      'Your narrative arc was very strong. You connected your past experiences to the current role requirements effectively. Consider shortening the early educational part to spend more time on recent wins.',
-  },
-  {
-    n: '02',
-    title: '"How do you handle conflict within a team environment?"',
-    meta: 'Situational Question • 3m 40s',
-    score: '6/10',
-    badge: 'Needs Work',
-    tone: 'warning',
-    insight:
-      'While your example was relevant, the resolution felt a bit vague. Try using the STAR method (Situation, Task, Action, Result) more strictly to quantify the positive outcome of your intervention.',
-  },
-  {
-    n: '03',
-    title: '"Where do you see yourself in five years?"',
-    meta: 'Career Goals • 1m 50s',
-    score: '8.5/10',
-    badge: 'Strong',
-    tone: 'success',
-    insight:
-      'Great alignment with company values! Your response showed ambition while remaining realistic. Adding a specific skill you hope to master would make this answer a perfect 10.',
-  },
-]
+type Colours = typeof Colors.light
 
 export default function Results() {
   const colorScheme = useColorScheme()
   const colors = Colors[colorScheme ?? 'light']
-  const [hasResults, setHasResults] = useState(false)
+  // Present when the user just finished an interview; absent when they simply
+  // opened the Results tab, in which case the most recent session is shown.
+  const { sessionId } = useLocalSearchParams<{ sessionId?: string }>()
+
+  const [session, setSession] = useState<HistoryDetail | null>(null)
+  const [isLoading, setIsLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [isGrading, setIsGrading] = useState(false)
+  const [isRetaking, setIsRetaking] = useState(false)
+
+  const isMountedRef = useRef(true)
+
+  const load = useCallback(async () => {
+    setIsLoading(true)
+    setError(null)
+
+    try {
+      let id = sessionId
+
+      // No id to show: fall back to the newest session so the tab reflects the
+      // user's actual history instead of claiming they have never interviewed.
+      if (!id) {
+        const recent = await historyService.list({ page: 1, limit: 1, sort: 'recent' })
+        id = recent.data[0]?.id
+      }
+
+      if (!id) {
+        if (isMountedRef.current) setSession(null)
+        return
+      }
+
+      const detail = await historyService.getById(id)
+      if (isMountedRef.current) setSession(detail)
+    } catch (err) {
+      if (isMountedRef.current) setError(toAuthError(err).message)
+    } finally {
+      if (isMountedRef.current) setIsLoading(false)
+    }
+  }, [sessionId])
+
+  // Refetch on focus: grading finishes server-side, so a session that landed
+  // here ungraded can be scored by the time the user comes back to this tab.
+  useFocusEffect(
+    useCallback(() => {
+      isMountedRef.current = true
+      load()
+      return () => {
+        isMountedRef.current = false
+      }
+    }, [load])
+  )
+
+  const graded = useMemo(
+    () => (session?.questions ?? []).filter((question) => question.response?.feedback != null),
+    [session]
+  )
+
+  const answered = useMemo(
+    () => (session?.questions ?? []).filter((question) => question.response?.transcribed_text),
+    [session]
+  )
+
+  /**
+   * The session row stores only an overall score, so the per-metric breakdown
+   * is averaged across every answered question that came back with feedback.
+   */
+  const metrics = useMemo(() => {
+    const feedbacks = graded.map((question) => question.response!.feedback!)
+    if (feedbacks.length === 0) return []
+
+    const average = (pick: (scores: (typeof feedbacks)[number]['scores']) => number | null) => {
+      const values = feedbacks
+        .map((feedback) => pick(feedback.scores))
+        .filter((value): value is number => value != null)
+      if (values.length === 0) return null
+      // A computed mean, not a stored score - round to the 2dp the score
+      // columns use so it does not render as a long float.
+      return Math.round((values.reduce((sum, value) => sum + value, 0) / values.length) * 100) / 100
+    }
+
+    return [
+      { label: 'Relevance', value: average((scores) => scores.relevance), color: colors.tint },
+      { label: 'Clarity', value: average((scores) => scores.clarity), color: '#7A4CF0' },
+      { label: 'Confidence', value: average((scores) => scores.confidence), color: colors.success },
+      { label: 'Completeness', value: average((scores) => scores.completeness), color: colors.warning },
+    ].filter((metric) => metric.value != null)
+  }, [graded, colors])
+
+  /**
+   * Grading runs when the interview ends, but it is a slow model call that is
+   * allowed to fail without blocking the candidate. When it did fail there are
+   * answers on file and no scores, and the only fix is to ask for it again.
+   */
+  const scoreNow = async () => {
+    if (!session || isGrading) return
+
+    setIsGrading(true)
+    setError(null)
+    try {
+      await interviewService.generateFeedback(session.id)
+      await load()
+    } catch (err) {
+      if (isMountedRef.current) setError(toAuthError(err).message)
+    } finally {
+      if (isMountedRef.current) setIsGrading(false)
+    }
+  }
+
+  /**
+   * A finished session cannot be reopened, so a retake is a fresh session built
+   * from the same source material - no going back to Practice to paste the job
+   * description in again.
+   */
+  const retake = async () => {
+    if (!session || isRetaking) return
+
+    setIsRetaking(true)
+    setError(null)
+    try {
+      const prepared = await interviewService.retake(session.id)
+      if (!isMountedRef.current) return
+
+      setPreparedSession(prepared)
+      router.push({ pathname: '/countdown', params: { sessionId: prepared.session.id } })
+    } catch (err) {
+      if (isMountedRef.current) setError(toAuthError(err).message)
+    } finally {
+      if (isMountedRef.current) setIsRetaking(false)
+    }
+  }
+
+  const band = scoreBand(session?.overall_score)
+  const justFinished = Boolean(sessionId)
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.card }} edges={['top']}>
@@ -67,118 +164,233 @@ export default function Results() {
         </Pressable>
       </View>
 
-      <ScrollView
-        style={{ backgroundColor: colors.background }}
-        contentContainerStyle={{ padding: 20, paddingBottom: 32, flexGrow: 1 }}
-        showsVerticalScrollIndicator={false}
-      >
-        {!hasResults ? (
-          <View style={styles.emptyContainer}>
-            <View style={[styles.emptyIcon, { backgroundColor: colors.brandSoft }]}>
-              <Ionicons name="stats-chart" size={32} color={colors.tint} />
-            </View>
-            <ThemedText style={[styles.emptyTitle, { color: colors.oppositeColor }]}>
-              No interviews yet
-            </ThemedText>
-            <ThemedText style={[styles.emptyBody, { color: colors.subtext }]}>
-              Complete an interview session to see your detailed results, performance metrics, and AI-powered insights here.
-            </ThemedText>
-            <Pressable
-              style={[styles.startBtn, { backgroundColor: colors.tint }]}
-              onPress={() => router.push('/(tabs)/practice')}
-            >
-              <ThemedText style={styles.startBtnText}>Start Your First Interview</ThemedText>
-              <Ionicons name="play" size={16} color="#fff" />
-            </Pressable>
+      {isLoading && !session ? (
+        <View style={[styles.centered, { backgroundColor: colors.background }]}>
+          <ActivityIndicator color={colors.tint} />
+        </View>
+      ) : error && !session ? (
+        <View style={[styles.centered, { backgroundColor: colors.background }]}>
+          <Ionicons name="alert-circle-outline" size={34} color={colors.danger} />
+          <ThemedText style={[styles.errorTitle, { color: colors.oppositeColor }]}>
+            Could not load your results
+          </ThemedText>
+          <ThemedText style={[styles.errorBody, { color: colors.subtext }]}>{error}</ThemedText>
+          <Pressable style={[styles.retryBtn, { backgroundColor: colors.tint }]} onPress={load}>
+            <ThemedText style={styles.retryBtnText}>Try Again</ThemedText>
+          </Pressable>
+        </View>
+      ) : (
+        <ScrollView
+          style={{ backgroundColor: colors.background }}
+          contentContainerStyle={{ padding: 20, paddingBottom: 32, flexGrow: 1 }}
+          showsVerticalScrollIndicator={false}
+        >
+          {!session ? (
+            <EmptyState colors={colors} />
+          ) : (
+            <>
+              {error ? (
+                <View style={[styles.errorBox, { backgroundColor: colors.dangerBg }]}>
+                  <ThemedText style={{ color: colors.danger, fontSize: 13 }}>{error}</ThemedText>
+                </View>
+              ) : null}
 
-            <View style={[styles.tipCard, { backgroundColor: colors.brandSoft, borderColor: colors.border }]}>
-              <View style={styles.tipHeader}>
-                <Ionicons name="bulb" size={16} color={colors.warning} />
-                <ThemedText style={[styles.tipTitle, { color: colors.oppositeColor }]}>Getting Started</ThemedText>
-              </View>
-              <ThemedText style={[styles.tipBody, { color: colors.subtext }]}>
-                Start with a practice interview to get real-time feedback on your answers, speech clarity, confidence, and more.
+              <ThemedText style={[styles.heroTitle, { color: colors.tint }]}>
+                {justFinished
+                  ? `Interview Session${'\n'}Complete!`
+                  : session.session_title || 'Interview Session'}
               </ThemedText>
-            </View>
-          </View>
-        ) : (
-          <>
-            <ThemedText style={[styles.heroTitle, { color: colors.tint }]}>
-              Interview Session{'\n'}Complete!
-            </ThemedText>
-            <ThemedText style={[styles.heroSub, { color: colors.subtext }]}>
-              You&apos;ve successfully finished your mock interview with our AI recruiter.
-            </ThemedText>
-
-            <View style={[styles.scoreCard, { backgroundColor: colors.card }]}>
-              <ThemedText style={[styles.scoreTag, { color: colors.subtext }]}>OVERALL PERFORMANCE</ThemedText>
-              <View style={[styles.ring, { borderColor: colors.tint }]}>
-                <ThemedText style={[styles.ringNum, { color: colors.tint }]}>72%</ThemedText>
-              </View>
-              <View style={[styles.goodPill, { backgroundColor: colors.successBg }]}>
-                <ThemedText style={[styles.goodPillText, { color: colors.success }]}>Good Job!</ThemedText>
-              </View>
-            </View>
-
-            <View style={[styles.metricsCard, { backgroundColor: colors.card }]}>
-              <ThemedText style={[styles.metricsTitle, { color: colors.oppositeColor }]}>Performance Metrics</ThemedText>
-
-              <Metric label="Clarity" value="8/10" pct={0.8} color={colors.tint} track={colors.border} text={colors.oppositeColor} />
-              <Metric label="Quality" value="7/10" pct={0.7} color="#7A4CF0" track={colors.border} text={colors.oppositeColor} />
-              <Metric label="Confidence" value="8.5/10" pct={0.85} color={colors.success} track={colors.border} text={colors.oppositeColor} />
-
-              <View style={styles.actionsRow}>
-                <Pressable style={[styles.btnPrimary, { backgroundColor: colors.tint }]} onPress={() => router.replace('/(tabs)/dashboard')}>
-                  <ThemedText style={styles.btnPrimaryText}>Save Results</ThemedText>
-                </Pressable>
-                <Pressable
-                  style={[styles.btnOutline, { borderColor: colors.tint }]}
-                  // A retake is a new session: a completed one already holds
-                  // answers and the API rejects further submissions to it.
-                  onPress={() => router.replace('/(tabs)/practice')}
-                >
-                  <ThemedText style={[styles.btnOutlineText, { color: colors.tint }]}>Retake Session</ThemedText>
-                </Pressable>
-              </View>
-            </View>
-
-            <View style={styles.sectionHead}>
-              <ThemedText style={[styles.sectionTitle, { color: colors.oppositeColor }]}>
-                Question-by-Question{'\n'}Analysis
+              <ThemedText style={[styles.heroSub, { color: colors.subtext }]}>
+                {justFinished
+                  ? "You've successfully finished your mock interview with our AI recruiter."
+                  : session.job_description
+                    ? [session.job_description.title, session.job_description.company_name]
+                        .filter(Boolean)
+                        .join(' · ')
+                    : 'Practice session'}
               </ThemedText>
-              <Pressable style={styles.historyLink} onPress={() => router.push('/history')} hitSlop={8}>
-                <ThemedText style={[styles.historyText, { color: colors.tint }]}>View{'\n'}History</ThemedText>
-                <Ionicons name="time-outline" size={16} color={colors.tint} />
-              </Pressable>
-            </View>
 
-            {QUESTIONS.map((q) => (
-              <QuestionCard key={q.n} q={q} colors={colors} />
-            ))}
-
-            <LinearGradient
-              colors={[colors.tint, '#7A4CF0']}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 1 }}
-              style={styles.unlockCard}
-            >
-              <View style={styles.unlockIconWrap}>
-                <Ionicons name="trending-up" size={22} color="#fff" />
-              </View>
-              <View style={{ flex: 1 }}>
-                <ThemedText style={styles.unlockTitle}>Unlock Deep Analytics</ThemedText>
-                <ThemedText style={styles.unlockSub}>
-                  Get sentiment analysis and keyword optimization tips for your next interview.
+              <View style={[styles.scoreCard, { backgroundColor: colors.card }]}>
+                <ThemedText style={[styles.scoreTag, { color: colors.subtext }]}>
+                  OVERALL PERFORMANCE
                 </ThemedText>
-                <Pressable style={[styles.goPro, { backgroundColor: colors.card }]}>
-                  <ThemedText style={[styles.goProText, { color: colors.tint }]}>Go Pro Now</ThemedText>
+                <View
+                  style={[
+                    styles.ring,
+                    { borderColor: session.overall_score != null ? colors.tint : colors.border },
+                  ]}
+                >
+                  <ThemedText style={[styles.ringNum, { color: colors.tint }]}>
+                    {formatScore(session.overall_score)}
+                  </ThemedText>
+                </View>
+                <View style={[styles.goodPill, { backgroundColor: toneBg(band.tone, colors) }]}>
+                  <ThemedText style={[styles.goodPillText, { color: toneColor(band.tone, colors) }]}>
+                    {band.label}
+                  </ThemedText>
+                </View>
+              </View>
+
+              <View style={[styles.metricsCard, { backgroundColor: colors.card }]}>
+                <ThemedText style={[styles.metricsTitle, { color: colors.oppositeColor }]}>
+                  Performance Metrics
+                </ThemedText>
+
+                {metrics.length > 0 ? (
+                  metrics.map((metric) => (
+                    <Metric
+                      key={metric.label}
+                      label={metric.label}
+                      value={formatScore(metric.value)}
+                      pct={scoreToPercent(metric.value)}
+                      color={metric.color}
+                      track={colors.border}
+                      text={colors.oppositeColor}
+                    />
+                  ))
+                ) : (
+                  <View style={styles.ungraded}>
+                    <ThemedText style={{ color: colors.subtext, fontSize: 13, lineHeight: 19 }}>
+                      {answered.length > 0
+                        ? 'Your answers are saved, but scoring did not finish. You can run it again now.'
+                        : 'No answers were recorded for this session, so there is nothing to score.'}
+                    </ThemedText>
+                    {answered.length > 0 ? (
+                      <Pressable
+                        style={[styles.btnPrimary, { backgroundColor: colors.tint, opacity: isGrading ? 0.6 : 1 }]}
+                        onPress={scoreNow}
+                        disabled={isGrading}
+                      >
+                        {isGrading ? <ActivityIndicator size="small" color="#fff" /> : null}
+                        <ThemedText style={styles.btnPrimaryText}>
+                          {isGrading ? 'Scoring...' : 'Score This Interview'}
+                        </ThemedText>
+                      </Pressable>
+                    ) : null}
+                  </View>
+                )}
+
+                <View style={[styles.summaryRow, { borderTopColor: colors.divider }]}>
+                  <Stat
+                    label="Questions"
+                    value={`${session.questions_answered ?? answered.length}/${
+                      session.total_questions ?? session.questions.length
+                    }`}
+                    colors={colors}
+                  />
+                  <Stat label="Duration" value={formatDuration(session.duration_seconds)} colors={colors} />
+                  <Stat
+                    label="Status"
+                    value={session.status === 'paused' ? 'Paused' : 'Completed'}
+                    colors={colors}
+                  />
+                </View>
+
+                <View style={styles.actionsColumn}>
+                  <Pressable
+                    style={[styles.btnOutline, { borderColor: colors.tint, opacity: isRetaking ? 0.6 : 1 }]}
+                    onPress={retake}
+                    disabled={isRetaking}
+                  >
+                    {isRetaking ? <ActivityIndicator size="small" color={colors.tint} /> : null}
+                    <ThemedText style={[styles.btnOutlineText, { color: colors.tint }]}>
+                      {isRetaking ? 'Starting...' : 'Retake Session'}
+                    </ThemedText>
+                  </Pressable>
+                  <Pressable
+                    style={[styles.btnPrimary, { backgroundColor: colors.tint }]}
+                    onPress={() => router.push({ pathname: '/history/[id]', params: { id: session.id } })}
+                  >
+                    <ThemedText style={styles.btnPrimaryText}>View Full Review</ThemedText>
+                  </Pressable>
+                </View>
+              </View>
+
+              <View style={styles.sectionHead}>
+                <ThemedText style={[styles.sectionTitle, { color: colors.oppositeColor }]}>
+                  Question-by-Question{'\n'}Analysis
+                </ThemedText>
+                <Pressable style={styles.historyLink} onPress={() => router.push('/history')} hitSlop={8}>
+                  <ThemedText style={[styles.historyText, { color: colors.tint }]}>
+                    View{'\n'}History
+                  </ThemedText>
+                  <Ionicons name="time-outline" size={16} color={colors.tint} />
                 </Pressable>
               </View>
-            </LinearGradient>
-          </>
-        )}
-      </ScrollView>
+
+              {session.questions.length === 0 ? (
+                <View style={[styles.qCard, { backgroundColor: colors.card }]}>
+                  <ThemedText style={{ color: colors.subtext, fontSize: 14 }}>
+                    No questions were recorded for this session.
+                  </ThemedText>
+                </View>
+              ) : (
+                session.questions.map((question) => (
+                  <QuestionCard key={question.id} question={question} colors={colors} />
+                ))
+              )}
+
+              <LinearGradient
+                colors={[colors.tint, '#7A4CF0']}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 1 }}
+                style={styles.unlockCard}
+              >
+                <View style={styles.unlockIconWrap}>
+                  <Ionicons name="trending-up" size={22} color="#fff" />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <ThemedText style={styles.unlockTitle}>Unlock Deep Analytics</ThemedText>
+                  <ThemedText style={styles.unlockSub}>
+                    Get sentiment analysis and keyword optimization tips for your next interview.
+                  </ThemedText>
+                  <Pressable style={[styles.goPro, { backgroundColor: colors.card }]}>
+                    <ThemedText style={[styles.goProText, { color: colors.tint }]}>Go Pro Now</ThemedText>
+                  </Pressable>
+                </View>
+              </LinearGradient>
+            </>
+          )}
+        </ScrollView>
+      )}
     </SafeAreaView>
+  )
+}
+
+function EmptyState({ colors }: { colors: Colours }) {
+  return (
+    <View style={styles.emptyContainer}>
+      <View style={[styles.emptyIcon, { backgroundColor: colors.brandSoft }]}>
+        <Ionicons name="stats-chart" size={32} color={colors.tint} />
+      </View>
+      <ThemedText style={[styles.emptyTitle, { color: colors.oppositeColor }]}>
+        No interviews yet
+      </ThemedText>
+      <ThemedText style={[styles.emptyBody, { color: colors.subtext }]}>
+        Complete an interview session to see your detailed results, performance metrics, and AI-powered
+        insights here.
+      </ThemedText>
+      <Pressable
+        style={[styles.startBtn, { backgroundColor: colors.tint }]}
+        onPress={() => router.push('/(tabs)/practice')}
+      >
+        <ThemedText style={styles.startBtnText}>Start Your First Interview</ThemedText>
+        <Ionicons name="play" size={16} color="#fff" />
+      </Pressable>
+
+      <View style={[styles.tipCard, { backgroundColor: colors.brandSoft, borderColor: colors.border }]}>
+        <View style={styles.tipHeader}>
+          <Ionicons name="bulb" size={16} color={colors.warning} />
+          <ThemedText style={[styles.tipTitle, { color: colors.oppositeColor }]}>
+            Getting Started
+          </ThemedText>
+        </View>
+        <ThemedText style={[styles.tipBody, { color: colors.subtext }]}>
+          Start with a practice interview to get real-time feedback on your answers, speech clarity,
+          confidence, and more.
+        </ThemedText>
+      </View>
+    </View>
   )
 }
 
@@ -198,38 +410,91 @@ function Metric({
   )
 }
 
-function QuestionCard({ q, colors }: { q: Question; colors: any }) {
-  const tone = q.tone === 'success' ? colors.success : colors.warning
-  const toneBg = q.tone === 'success' ? colors.successBg : colors.warningBg
-  const accent = q.tone === 'success' ? colors.success : '#7A4CF0'
+function Stat({ label, value, colors }: { label: string; value: string; colors: Colours }) {
+  return (
+    <View style={styles.stat}>
+      <ThemedText style={[styles.statValue, { color: colors.oppositeColor }]}>{value}</ThemedText>
+      <ThemedText style={[styles.statLabel, { color: colors.subtext }]}>{label}</ThemedText>
+    </View>
+  )
+}
+
+function QuestionCard({ question, colors }: { question: HistoryQuestion; colors: Colours }) {
+  const feedback = question.response?.feedback ?? null
+  const score = feedback?.overall_score ?? null
+  const band = scoreBand(score)
+  const accent = band.tone === 'success' ? colors.success : '#7A4CF0'
+  const insights = feedbackInsights(feedback)
+
+  const meta = [
+    question.question_type,
+    question.response?.response_duration_seconds != null
+      ? formatDuration(question.response.response_duration_seconds)
+      : null,
+  ]
+    .filter(Boolean)
+    .join(' • ')
+
   return (
     <View style={[styles.qCard, { backgroundColor: colors.card }]}>
       <View style={styles.qTop}>
         <View style={[styles.qNum, { backgroundColor: colors.brandSoft }]}>
-          <ThemedText style={[styles.qNumText, { color: colors.subtext }]}>{q.n}</ThemedText>
+          <ThemedText style={[styles.qNumText, { color: colors.subtext }]}>
+            {String(question.question_number).padStart(2, '0')}
+          </ThemedText>
         </View>
         <View style={{ flex: 1 }}>
-          <ThemedText style={[styles.qTitle, { color: colors.oppositeColor }]}>{q.title}</ThemedText>
-          <ThemedText style={[styles.qMeta, { color: colors.subtext }]}>{q.meta}</ThemedText>
+          <ThemedText style={[styles.qTitle, { color: colors.oppositeColor }]}>
+            &quot;{question.question_text}&quot;
+          </ThemedText>
+          {meta.length > 0 ? (
+            <ThemedText style={[styles.qMeta, { color: colors.subtext }]}>{meta}</ThemedText>
+          ) : null}
         </View>
         <View style={{ alignItems: 'flex-end' }}>
-          <ThemedText style={[styles.qScore, { color: tone }]}>{q.score}</ThemedText>
-          <View style={[styles.qBadge, { backgroundColor: toneBg }]}>
-            <ThemedText style={[styles.qBadgeText, { color: tone }]}>{q.badge}</ThemedText>
+          <ThemedText style={[styles.qScore, { color: toneColor(band.tone, colors) }]}>
+            {formatScore(score)}
+          </ThemedText>
+          <View style={[styles.qBadge, { backgroundColor: toneBg(band.tone, colors) }]}>
+            <ThemedText style={[styles.qBadgeText, { color: toneColor(band.tone, colors) }]}>
+              {band.label}
+            </ThemedText>
           </View>
         </View>
       </View>
 
-      <View style={[styles.insightWrap, { backgroundColor: colors.inputBg }]}>
-        <View style={[styles.insightAccent, { backgroundColor: accent }]} />
-        <View style={styles.insightInner}>
-          <View style={styles.insightHeader}>
-            <Ionicons name="sparkles" size={14} color={accent} />
-            <ThemedText style={[styles.insightTag, { color: accent }]}>AI INSIGHT</ThemedText>
+      {insights.length > 0 ? (
+        <View style={[styles.insightWrap, { backgroundColor: colors.inputBg }]}>
+          <View style={[styles.insightAccent, { backgroundColor: accent }]} />
+          <View style={styles.insightInner}>
+            <View style={styles.insightHeader}>
+              <Ionicons name="sparkles" size={14} color={accent} />
+              <ThemedText style={[styles.insightTag, { color: accent }]}>AI INSIGHT</ThemedText>
+            </View>
+            {insights.map((section) => (
+              <View key={section.label} style={{ marginTop: 6 }}>
+                <ThemedText style={[styles.insightSubTag, { color: colors.subtext }]}>
+                  {section.label}
+                </ThemedText>
+                {section.items.map((item, index) => (
+                  <ThemedText
+                    key={`${section.label}-${index}`}
+                    style={[styles.insightText, { color: colors.oppositeColor }]}
+                  >
+                    {section.items.length > 1 ? `• ${item}` : item}
+                  </ThemedText>
+                ))}
+              </View>
+            ))}
           </View>
-          <ThemedText style={[styles.insightText, { color: colors.oppositeColor }]}>{q.insight}</ThemedText>
         </View>
-      </View>
+      ) : (
+        <ThemedText style={[styles.noInsight, { color: colors.muted }]}>
+          {question.response?.transcribed_text
+            ? 'This answer has not been scored yet.'
+            : 'You did not answer this question.'}
+        </ThemedText>
+      )}
     </View>
   )
 }
@@ -248,6 +513,13 @@ const styles = StyleSheet.create({
   headerTitle: { fontSize: 16, fontWeight: '700' },
   headerHistoryBtn: { flexDirection: 'row', alignItems: 'center', gap: 5 },
   headerHistoryText: { fontSize: 13, fontWeight: '600' },
+
+  centered: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24, gap: 10 },
+  errorTitle: { fontWeight: '700', fontSize: 17, textAlign: 'center' },
+  errorBody: { fontSize: 14, textAlign: 'center', marginBottom: 8 },
+  retryBtn: { paddingHorizontal: 22, paddingVertical: 11, borderRadius: 999 },
+  retryBtnText: { color: '#fff', fontWeight: '700' },
+  errorBox: { padding: 12, borderRadius: 10, marginBottom: 14 },
 
   emptyContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 24, paddingVertical: 40 },
   emptyIcon: { width: 64, height: 64, borderRadius: 32, alignItems: 'center', justifyContent: 'center', marginBottom: 20 },
@@ -283,10 +555,26 @@ const styles = StyleSheet.create({
   metricTrack: { height: 6, borderRadius: 3, overflow: 'hidden' },
   metricFill: { height: '100%', borderRadius: 3 },
 
-  actionsRow: { flexDirection: 'row', gap: 12, marginTop: 10 },
-  btnPrimary: { flex: 1, borderRadius: 999, paddingVertical: 12, alignItems: 'center' },
+  ungraded: { gap: 12, marginBottom: 6 },
+
+  summaryRow: {
+    flexDirection: 'row', justifyContent: 'space-around',
+    borderTopWidth: 1, paddingTop: 14, marginTop: 4,
+  },
+  stat: { alignItems: 'center', gap: 2 },
+  statValue: { fontWeight: '700', fontSize: 15 },
+  statLabel: { fontSize: 11 },
+
+  actionsColumn: { gap: 10, marginTop: 16 },
+  btnPrimary: {
+    borderRadius: 999, paddingVertical: 12,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+  },
   btnPrimaryText: { color: '#fff', fontWeight: '700' },
-  btnOutline: { flex: 1, borderRadius: 999, paddingVertical: 12, alignItems: 'center', borderWidth: 1 },
+  btnOutline: {
+    borderRadius: 999, paddingVertical: 12, borderWidth: 1,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+  },
   btnOutlineText: { fontWeight: '700' },
 
   sectionHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 },
@@ -299,16 +587,18 @@ const styles = StyleSheet.create({
   qNum: { width: 30, height: 30, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
   qNumText: { fontWeight: '700', fontSize: 13 },
   qTitle: { fontWeight: '700', fontSize: 14, marginBottom: 4 },
-  qMeta: { fontSize: 12 },
+  qMeta: { fontSize: 12, textTransform: 'capitalize' },
   qScore: { fontWeight: '800', fontSize: 14, marginBottom: 4 },
   qBadge: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6 },
   qBadgeText: { fontSize: 11, fontWeight: '700' },
+  noInsight: { fontSize: 13, fontStyle: 'italic', marginTop: 12 },
 
   insightWrap: { borderRadius: 10, marginTop: 12, overflow: 'hidden', flexDirection: 'row' },
   insightAccent: { width: 4 },
   insightInner: { flex: 1, padding: 12 },
   insightHeader: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 6 },
   insightTag: { fontSize: 11, fontWeight: '700', letterSpacing: 0.5 },
+  insightSubTag: { fontSize: 10, fontWeight: '700', letterSpacing: 0.5, marginBottom: 3 },
   insightText: { fontSize: 13, lineHeight: 19 },
 
   unlockCard: { borderRadius: 14, padding: 16, marginTop: 8, flexDirection: 'row', gap: 14, alignItems: 'flex-start' },

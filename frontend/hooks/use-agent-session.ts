@@ -185,6 +185,11 @@ export function useAgentSession({ sessionId, mode, voice, maxQuestions, onFinish
 
     agent.start().catch((err: any) => {
       if (!mounted.current) return
+      // A startup failure can happen after the socket has opened (for
+      // example, while initializing the native audio graph). Close the
+      // partially-started connection so it cannot later emit a second,
+      // misleading disconnect error over the real startup error.
+      agent.stop()
       setError(err?.message || 'Could not start the interview.')
       setPhase('error')
     })
