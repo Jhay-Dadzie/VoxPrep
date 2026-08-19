@@ -73,18 +73,6 @@ function hydrateStoredFeedbackRow(row) {
   };
 }
 
-function toAggregateRow(row) {
-  const hydrated = hydrateStoredFeedbackRow(row);
-  return {
-    relevance_score: hydrated.relevance_score ?? null,
-    completeness_score: hydrated.completeness_score ?? null,
-    technical_accuracy_score: hydrated.technical_accuracy_score ?? null,
-    clarity_score: hydrated.clarity_score ?? null,
-    confidence_score: hydrated.confidence_score ?? null,
-    overall_score: hydrated.overall_score ?? null,
-  };
-}
-
 function buildPersistedPayload(basePayload, normalized, model, errorMessage = null) {
   const now = new Date().toISOString();
 
@@ -210,14 +198,21 @@ async function upsertFeedbackRow(payload) {
   return data;
 }
 
-/** Zero-scored payload used when a response could not be graded at all. */
+/**
+ * Payload used when a response could not be graded at all.
+ *
+ * Unscored, not zero-scored. A zero is a verdict on the answer, and storing one
+ * here would let a grader outage report itself to the candidate as a 0% — for an
+ * interview they may well have aced. Null says what actually happened: we do not
+ * know. The columns are all nullable, and `force` can regrade these later.
+ */
 const EMPTY_NORMALIZED = {
-  relevance_score: 0,
-  completeness_score: 0,
-  technical_accuracy_score: 0,
-  clarity_score: 0,
-  confidence_score: 0,
-  overall_score: 0,
+  relevance_score: null,
+  completeness_score: null,
+  technical_accuracy_score: null,
+  clarity_score: null,
+  confidence_score: null,
+  overall_score: null,
   strengths: [],
   improvements: [],
   summary: '',
@@ -297,22 +292,7 @@ async function generateAndStoreFeedbackForResponse(response, jobContext) {
     _error(`Feedback generation failed for response ${response.id}:`, err);
     const errorMessage = (err.message || 'Unknown error').slice(0, 500);
     const persisted = await upsertFeedbackRow(
-      buildPersistedPayload(
-        basePayload,
-        {
-          relevance_score: 0,
-          completeness_score: 0,
-          technical_accuracy_score: 0,
-          clarity_score: 0,
-          confidence_score: 0,
-          overall_score: 0,
-          strengths: [],
-          improvements: [],
-          summary: '',
-        },
-        null,
-        errorMessage
-      )
+      buildPersistedPayload(basePayload, EMPTY_NORMALIZED, null, errorMessage)
     );
 
     return {
@@ -324,6 +304,16 @@ async function generateAndStoreFeedbackForResponse(response, jobContext) {
   }
 }
 
+/**
+ * Recompute the session's headline score from its graded answers.
+ *
+ * Only successfully graded rows count. An answer the grader could not score
+ * says nothing about how the candidate performed, so averaging it in as a zero
+ * would report a grader outage to the candidate as a bad interview — and when
+ * every answer failed, as a flat 0%. With nothing gradable the score is left
+ * untouched rather than written as 0, so a later `force` regrade can still fill
+ * it in.
+ */
 async function updateSessionOverallScore(sessionId) {
   const supabase = getSupabase();
   const { data: rows } = await supabase
@@ -333,8 +323,12 @@ async function updateSessionOverallScore(sessionId) {
     )
     .eq('session_id', sessionId);
 
-  const aggregate = computeSessionAggregate((rows || []).map(toAggregateRow));
-  if (aggregate.response_count === 0) return;
+  const scored = (rows || [])
+    .map(hydrateStoredFeedbackRow)
+    .filter((row) => row.generation_status === 'completed');
+
+  const aggregate = computeSessionAggregate(scored);
+  if (aggregate.overall_score === null) return;
 
   await supabase.from('interview_sessions').update({ overall_score: aggregate.overall_score }).eq('id', sessionId);
 }

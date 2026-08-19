@@ -61,6 +61,42 @@ export const buildAgentSettings = (jobData, { mode, voice, maxQuestions = 15, ca
 });
 
 /**
+ * How the interviewer signs off, per reason for ending.
+ *
+ * An interview that stops dead the moment the last answer lands reads as a
+ * dropped call, so every ending gets a spoken hand-off. The wording differs
+ * because the reasons do: being cut short by the candidate is not the same
+ * event as running out of questions, and one line covering both sounds wrong
+ * for at least one of them.
+ *
+ * The cap line opens by conceding the turn ("that's everything I wanted to
+ * cover") because it is usually spoken right after the interviewer has already
+ * started asking one more question — the last exchange is only recognised as
+ * complete when the interviewer speaks again. Bridging is what makes that land
+ * as a decision rather than an interruption.
+ */
+const CLOSING_REMARKS = {
+  limit:
+    "Actually, that's everything I wanted to cover, so let's leave it there. " +
+    "Thank you for walking me through all of that today — you'll see your feedback in just a moment.",
+  ended_early:
+    "Of course, let's wrap up there. Thank you for your time today — " +
+    "you'll see your feedback on what we covered in just a moment.",
+  idle:
+    "That feels like a natural place to finish. Thank you for your time today — " +
+    "you'll see your feedback in just a moment.",
+  time_limit:
+    "We're coming up on time, so let's finish there. Thank you for talking me through all of that — " +
+    "you'll see your feedback in just a moment.",
+};
+
+const DEFAULT_CLOSING_REMARK =
+  'That covers everything I wanted to ask. Thank you for your time today — ' +
+  'you will see your feedback in a moment.';
+
+export const closingRemarkFor = (reason) => CLOSING_REMARKS[reason] || DEFAULT_CLOSING_REMARK;
+
+/**
  * Instruction sent when the question cap is reached.
  *
  * Two messages rather than one. `UpdatePrompt` stops the interviewer asking
@@ -77,10 +113,8 @@ export const buildClosingMessages = (closingRemark) => [
   },
   {
     type: 'InjectAgentMessage',
-    content:
-      closingRemark ||
-      'That covers everything I wanted to ask. Thank you for your time today — you will see your feedback in a moment.',
+    content: closingRemark || DEFAULT_CLOSING_REMARK,
   },
 ];
 
-export default { buildAgentSettings, buildClosingMessages, resolveAgentVoice };
+export default { buildAgentSettings, buildClosingMessages, closingRemarkFor, resolveAgentVoice };

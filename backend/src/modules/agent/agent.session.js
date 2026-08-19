@@ -6,7 +6,7 @@ import {
 } from '../../config/deepgram-agent.js';
 import { info, warn, error as logError } from '../../core/errors/logger.js';
 import { addQuestionToSession, completeSession, submitAnswer } from '../interviews/interview.service.js';
-import { buildAgentSettings, buildClosingMessages } from './agent.settings.js';
+import { buildAgentSettings, buildClosingMessages, closingRemarkFor } from './agent.settings.js';
 import { TranscriptPairer, classifyQuestion } from './agent.transcript.js';
 
 /**
@@ -56,6 +56,8 @@ export class AgentSession {
     this.pairer = new TranscriptPairer();
     this.askedCount = 0;
     this.closing = false;
+    /** Set once the sign-off has actually been spoken — see onUpstreamMessage. */
+    this.closingSpoken = false;
     this.finished = false;
     this.startedAt = Date.now();
 
@@ -169,8 +171,15 @@ export class AgentSession {
 
       case 'AgentAudioDone':
         this.sendEvent({ type: 'agent_done' });
-        // The closing line has finished playing; now it is safe to hang up.
-        if (this.closing) this.finish('closed');
+        // Hang up only once the sign-off itself has finished playing.
+        //
+        // Not merely "we are closing": an exchange is only recognised as
+        // complete when the interviewer speaks again, so hitting the question
+        // cap means it has already started asking one more. That question's
+        // AgentAudioDone lands before the injected farewell has even been
+        // synthesised, and ending on it cut the sign-off off entirely — the
+        // call simply stopped after a question nobody was going to answer.
+        if (this.closing && this.closingSpoken) this.finish('closed');
         break;
 
       case 'Error':
@@ -191,6 +200,20 @@ export class AgentSession {
    */
   onConversationText(role, content) {
     this.sendEvent({ type: 'transcript', role, content });
+
+    // Once the interview is closing, the only interviewer turn left is the
+    // sign-off we injected. Noting that it has been said is what lets
+    // AgentAudioDone tell the farewell's end-of-audio from that of the
+    // question the agent was already part-way through.
+    //
+    // Nothing is paired from here on. The farewell is not a question and the
+    // candidate's "thanks, bye" is not an answer; written down as an exchange
+    // it becomes an extra question the grader is then asked to score, which it
+    // can only do badly.
+    if (this.closing) {
+      if (role === 'assistant') this.closingSpoken = true;
+      return;
+    }
 
     const exchange = this.pairer.add(role, content);
     if (!exchange) return;
@@ -239,10 +262,12 @@ export class AgentSession {
     this.sendEvent({ type: 'closing', reason });
 
     if (this.upstream?.readyState === WebSocket.OPEN) {
-      for (const message of buildClosingMessages()) {
+      for (const message of buildClosingMessages(closingRemarkFor(reason))) {
         this.upstream.send(JSON.stringify(message));
       }
-      // Backstop: if the sign-off never plays, the interview still ends.
+      // Backstop: if the sign-off never plays — the injection is refused, or
+      // its audio never arrives — the interview still ends rather than hanging
+      // on a `closingSpoken` that will never be set.
       setTimeout(() => this.finish('closing_timeout'), 15_000);
       return;
     }

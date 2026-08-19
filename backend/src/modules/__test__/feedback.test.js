@@ -41,9 +41,16 @@ describe('scoring.engine', () => {
       expect(avg).toBe(80);
     });
 
-    it('treats missing metrics as 0', () => {
+    it('ignores metrics the grader did not report rather than scoring them 0', () => {
+      // technical_accuracy_score is optional in the assessment schema, so a
+      // behavioural answer legitimately comes back without it. Averaging the
+      // absent metrics in as zeros would report 20% for a perfect answer.
       const avg = averageSubScores({ relevance_score: 100 });
-      expect(avg).toBe(20); // (100+0+0+0+0)/5
+      expect(avg).toBe(100);
+    });
+
+    it('returns null when nothing was reported at all', () => {
+      expect(averageSubScores({})).toBeNull();
     });
   });
 
@@ -99,19 +106,20 @@ describe('scoring.engine', () => {
 
     it('repairs a partially malformed payload instead of throwing', () => {
       const result = normalizeFeedback({
-        relevance_score: 'high', // invalid -> 0
+        relevance_score: 'high', // unreadable -> null (unknown, not zero)
         completeness_score: 70,
         strengths: 'not an array', // invalid -> []
         improvements: null, // invalid -> []
         summary: 12345, // invalid -> ''
       });
 
-      expect(result.relevance_score).toBe(0);
+      expect(result.relevance_score).toBeNull();
       expect(result.completeness_score).toBe(70);
       expect(result.strengths).toEqual([]);
       expect(result.improvements).toEqual([]);
       expect(result.summary).toBe('');
-      expect(result.overall_score).toBe(Math.round((0 + 70 + 0 + 0 + 0) / 5));
+      // Only the one metric that came back readable feeds the overall.
+      expect(result.overall_score).toBe(70);
     });
 
     it('throws on a structurally unusable payload', () => {
@@ -163,6 +171,42 @@ describe('scoring.engine', () => {
       expect(agg.response_count).toBe(2);
       expect(agg.overall_score).toBe(50);
       expect(agg.relevance_score).toBe(50);
+    });
+
+    it('averages each metric over only the rows that reported it', () => {
+      // A behavioural answer graded without a technical score must not drag the
+      // session's technical average toward zero.
+      const agg = computeSessionAggregate([
+        {
+          relevance_score: 90,
+          completeness_score: 90,
+          technical_accuracy_score: 80,
+          clarity_score: 90,
+          confidence_score: 90,
+          overall_score: 90,
+        },
+        {
+          relevance_score: 70,
+          completeness_score: 70,
+          technical_accuracy_score: null, // not a technical question
+          clarity_score: 70,
+          confidence_score: 70,
+          overall_score: 70,
+        },
+      ]);
+
+      expect(agg.technical_accuracy_score).toBe(80);
+      expect(agg.overall_score).toBe(80);
+      expect(agg.response_count).toBe(2);
+    });
+
+    it('reports a metric no row scored as null rather than 0', () => {
+      const agg = computeSessionAggregate([
+        { relevance_score: 80, technical_accuracy_score: null, overall_score: 80 },
+      ]);
+
+      expect(agg.technical_accuracy_score).toBeNull();
+      expect(agg.relevance_score).toBe(80);
     });
   });
 });

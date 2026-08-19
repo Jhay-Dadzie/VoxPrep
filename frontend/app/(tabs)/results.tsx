@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, View } from 'react-native'
 import { LinearGradient } from 'expo-linear-gradient'
 import { Ionicons } from '@expo/vector-icons'
@@ -13,7 +13,7 @@ import { setPreparedSession } from '@/lib/prepared-session'
 import { toAuthError } from '@/services/error-handler'
 import type { HistoryDetail, HistoryQuestion } from '@/types/history'
 import { formatDuration, formatScore, scoreBand, scoreToPercent } from '@/lib/format'
-import { feedbackInsights, toneBg, toneColor } from '@/lib/feedback-view'
+import { feedbackFailed, feedbackInsights, toneBg, toneColor } from '@/lib/feedback-view'
 
 type Colours = typeof Colors.light
 
@@ -29,12 +29,22 @@ export default function Results() {
   const [error, setError] = useState<string | null>(null)
   const [isGrading, setIsGrading] = useState(false)
   const [isRetaking, setIsRetaking] = useState(false)
+  const [isSaved, setIsSaved] = useState(false)
 
   const isMountedRef = useRef(true)
+  const exitTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(
+    () => () => {
+      if (exitTimer.current) clearTimeout(exitTimer.current)
+    },
+    []
+  )
 
   const load = useCallback(async () => {
     setIsLoading(true)
     setError(null)
+    setIsSaved(false)
 
     try {
       let id = sessionId
@@ -80,6 +90,19 @@ export default function Results() {
   const answered = useMemo(
     () => (session?.questions ?? []).filter((question) => question.response?.transcribed_text),
     [session]
+  )
+
+  /**
+   * Answers that were given but carry no usable grade. A plain regrade picks up
+   * exactly these, so they are worth naming rather than leaving as blanks the
+   * candidate has to notice for themselves.
+   */
+  const ungraded = useMemo(
+    () =>
+      answered.filter(
+        (question) => !question.response?.feedback || feedbackFailed(question.response.feedback)
+      ),
+    [answered]
   )
 
   /**
@@ -149,6 +172,22 @@ export default function Results() {
     } finally {
       if (isMountedRef.current) setIsRetaking(false)
     }
+  }
+
+  /**
+   * Close out a just-finished interview.
+   *
+   * There is nothing to send: the session, its answers and its scores were
+   * written server-side the moment the interview ended. What the candidate is
+   * missing at this point is somewhere to press — an explicit way to put the
+   * results down and leave, and confirmation of where they went. The pause is
+   * only long enough for that confirmation to be read.
+   */
+  const saveAndFinish = () => {
+    if (isSaved) return
+
+    setIsSaved(true)
+    exitTimer.current = setTimeout(() => router.replace('/(tabs)/dashboard'), 900)
   }
 
   const band = scoreBand(session?.overall_score)
@@ -236,39 +275,54 @@ export default function Results() {
                   Performance Metrics
                 </ThemedText>
 
-                {metrics.length > 0 ? (
-                  metrics.map((metric) => (
-                    <Metric
-                      key={metric.label}
-                      label={metric.label}
-                      value={formatScore(metric.value)}
-                      pct={scoreToPercent(metric.value)}
-                      color={metric.color}
-                      track={colors.border}
-                      text={colors.oppositeColor}
-                    />
-                  ))
-                ) : (
+                {metrics.length > 0
+                  ? metrics.map((metric) => (
+                      <Metric
+                        key={metric.label}
+                        label={metric.label}
+                        value={formatScore(metric.value)}
+                        pct={scoreToPercent(metric.value)}
+                        color={metric.color}
+                        track={colors.border}
+                        text={colors.oppositeColor}
+                      />
+                    ))
+                  : null}
+
+                {/* Grading is a slow model call that is allowed to fail without
+                    blocking the candidate, so it can come back partial — or not
+                    at all. Either way the answers are on file and can be graded
+                    again; what must not happen is the screen quietly implying
+                    an ungraded answer was a bad one. */}
+                {ungraded.length > 0 ? (
                   <View style={styles.ungraded}>
                     <ThemedText style={{ color: colors.subtext, fontSize: 13, lineHeight: 19 }}>
-                      {answered.length > 0
-                        ? 'Your answers are saved, but scoring did not finish. You can run it again now.'
-                        : 'No answers were recorded for this session, so there is nothing to score.'}
+                      {metrics.length > 0
+                        ? `${ungraded.length} of your ${answered.length} answers could not be scored, so they are left out of the totals above.`
+                        : 'Your answers are saved, but scoring did not finish. You can run it again now.'}
                     </ThemedText>
-                    {answered.length > 0 ? (
-                      <Pressable
-                        style={[styles.btnPrimary, { backgroundColor: colors.tint, opacity: isGrading ? 0.6 : 1 }]}
-                        onPress={scoreNow}
-                        disabled={isGrading}
-                      >
-                        {isGrading ? <ActivityIndicator size="small" color="#fff" /> : null}
-                        <ThemedText style={styles.btnPrimaryText}>
-                          {isGrading ? 'Scoring...' : 'Score This Interview'}
-                        </ThemedText>
-                      </Pressable>
-                    ) : null}
+                    <Pressable
+                      style={[styles.btnPrimary, { backgroundColor: colors.tint, opacity: isGrading ? 0.6 : 1 }]}
+                      onPress={scoreNow}
+                      disabled={isGrading}
+                    >
+                      {isGrading ? <ActivityIndicator size="small" color="#fff" /> : null}
+                      <ThemedText style={styles.btnPrimaryText}>
+                        {isGrading
+                          ? 'Scoring...'
+                          : metrics.length > 0
+                            ? `Score the ${ungraded.length} that failed`
+                            : 'Score This Interview'}
+                      </ThemedText>
+                    </Pressable>
                   </View>
-                )}
+                ) : null}
+
+                {metrics.length === 0 && ungraded.length === 0 ? (
+                  <ThemedText style={{ color: colors.subtext, fontSize: 13, lineHeight: 19 }}>
+                    No answers were recorded for this session, so there is nothing to score.
+                  </ThemedText>
+                ) : null}
 
                 <View style={[styles.summaryRow, { borderTopColor: colors.divider }]}>
                   <Stat
@@ -297,12 +351,42 @@ export default function Results() {
                       {isRetaking ? 'Starting...' : 'Retake Session'}
                     </ThemedText>
                   </Pressable>
+                  {/* Right after an interview the save button is the primary
+                      action, so the review link steps down to an outline. */}
                   <Pressable
-                    style={[styles.btnPrimary, { backgroundColor: colors.tint }]}
+                    style={
+                      justFinished
+                        ? [styles.btnOutline, { borderColor: colors.tint }]
+                        : [styles.btnPrimary, { backgroundColor: colors.tint }]
+                    }
                     onPress={() => router.push({ pathname: '/history/[id]', params: { id: session.id } })}
                   >
-                    <ThemedText style={styles.btnPrimaryText}>View Full Review</ThemedText>
+                    <ThemedText
+                      style={justFinished ? [styles.btnOutlineText, { color: colors.tint }] : styles.btnPrimaryText}
+                    >
+                      View Full Review
+                    </ThemedText>
                   </Pressable>
+
+                  {justFinished ? (
+                    <Pressable
+                      style={[
+                        styles.btnPrimary,
+                        { backgroundColor: isSaved ? colors.success : colors.tint },
+                      ]}
+                      onPress={saveAndFinish}
+                      disabled={isSaved}
+                    >
+                      <Ionicons
+                        name={isSaved ? 'checkmark-circle' : 'bookmark-outline'}
+                        size={16}
+                        color="#fff"
+                      />
+                      <ThemedText style={styles.btnPrimaryText}>
+                        {isSaved ? 'Saved to your history' : 'Save & Finish'}
+                      </ThemedText>
+                    </Pressable>
+                  ) : null}
                 </View>
               </View>
 
@@ -490,9 +574,11 @@ function QuestionCard({ question, colors }: { question: HistoryQuestion; colors:
         </View>
       ) : (
         <ThemedText style={[styles.noInsight, { color: colors.muted }]}>
-          {question.response?.transcribed_text
-            ? 'This answer has not been scored yet.'
-            : 'You did not answer this question.'}
+          {!question.response?.transcribed_text
+            ? 'You did not answer this question.'
+            : feedbackFailed(feedback)
+              ? 'The grader could not score this answer — it is left out of your totals.'
+              : 'This answer has not been scored yet.'}
         </ThemedText>
       )}
     </View>

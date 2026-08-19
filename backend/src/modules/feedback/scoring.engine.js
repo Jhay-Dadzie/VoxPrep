@@ -6,7 +6,15 @@
  * so it can be unit tested in isolation and reused wherever a score needs
  * clamping (feedback module today; session/analytics rollups tomorrow).
  *
- * Score contract: every metric is an integer 0-100.
+ * Score contract: every metric is an integer 0-100, or null when the grader did
+ * not report it.
+ *
+ * Null is not zero, and the difference is the whole point. `technical_accuracy_score`
+ * is optional in the assessment schema, so a grader reading a behavioural answer
+ * routinely leaves it out. Recording that as 0 asserts the candidate scored
+ * nothing on it, and drags a five-metric average down by a fifth over a question
+ * that was never technical to begin with. An unreported metric is unknown, and
+ * unknown metrics are left out of averages rather than counted as failures.
  */
 
 const METRICS = [
@@ -35,16 +43,39 @@ function clampScore(value, fallback = 0) {
 }
 
 /**
- * Arithmetic mean of the 5 sub-scores, rounded to nearest int.
+ * Read a reported score, or null if the grader did not report a usable one.
+ *
+ * Unlike clampScore this never invents a number: `null`, `undefined`, `''` and
+ * unparseable text all mean "not reported". Number() would turn the first three
+ * into 0, which is exactly the confusion this function exists to prevent.
+ *
+ * @param {*} value
+ * @returns {number|null}
+ */
+function readScore(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const num = Number(value);
+  if (!Number.isFinite(num)) return null;
+  return Math.round(Math.min(MAX_SCORE, Math.max(MIN_SCORE, num)));
+}
+
+/** Mean of the reported values, or null when none were reported. */
+function meanOfReported(values) {
+  const reported = values.filter((value) => value !== null);
+  if (reported.length === 0) return null;
+  return Math.round(reported.reduce((acc, value) => acc + value, 0) / reported.length);
+}
+
+/**
+ * Arithmetic mean of the sub-scores the grader actually reported, rounded to
+ * nearest int. Metrics it left out are skipped, not counted as 0.
  * Used only as a safety-net fallback — see deriveOverallScore.
  *
  * @param {object} scores - object containing the 5 METRICS keys
- * @returns {number}
+ * @returns {number|null}
  */
 function averageSubScores(scores) {
-  const values = METRICS.map((key) => clampScore(scores[key]));
-  const sum = values.reduce((acc, v) => acc + v, 0);
-  return Math.round(sum / METRICS.length);
+  return meanOfReported(METRICS.map((key) => readScore(scores[key])));
 }
 
 /**
@@ -54,29 +85,29 @@ function averageSubScores(scores) {
  * it can weigh context (e.g. a technically thin but highly relevant
  * behavioral answer) better than a fixed formula. We only clamp it into
  * range. If the AI omits overall_score or returns something unusable, fall
- * back to the average of the 5 sub-scores rather than failing the response.
+ * back to the average of the sub-scores it did report rather than failing the
+ * response.
  *
  * @param {object} scores
  * @param {*} aiProvidedOverall
- * @returns {number}
+ * @returns {number|null} null only when the grader reported nothing at all
  */
 function deriveOverallScore(scores, aiProvidedOverall) {
-  const num = Number(aiProvidedOverall);
-  if (Number.isFinite(num)) {
-    return clampScore(num);
-  }
+  const provided = readScore(aiProvidedOverall);
+  if (provided !== null) return provided;
   return averageSubScores(scores);
 }
 
 /**
  * Normalize + validate the raw parsed AI JSON into the shape we persist.
- * Throws only if the payload is structurally unusable (not an object) —
- * anything partially usable is repaired via clampScore's fallback instead of
- * being thrown away, since a hard failure here would fail an entire
- * session's feedback run over one malformed field.
+ * Throws only if the payload is structurally unusable (not an object) — a
+ * metric that is missing or unreadable becomes null instead of failing the
+ * response, since a hard failure here would cost an entire session's feedback
+ * over one malformed field.
  *
  * @param {object} raw - parsed JSON from the AI feedback generator
- * @returns {object} normalized { ...5 scores, overall_score, strengths, improvements, summary }
+ * @returns {object} normalized { ...5 scores, overall_score, strengths, improvements, summary },
+ *   where any score may be null if the grader did not report a usable one
  */
 function normalizeFeedback(raw) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
@@ -84,11 +115,11 @@ function normalizeFeedback(raw) {
   }
 
   const scores = {
-    relevance_score: clampScore(raw.relevance_score),
-    completeness_score: clampScore(raw.completeness_score),
-    technical_accuracy_score: clampScore(raw.technical_accuracy_score),
-    clarity_score: clampScore(raw.clarity_score),
-    confidence_score: clampScore(raw.confidence_score),
+    relevance_score: readScore(raw.relevance_score),
+    completeness_score: readScore(raw.completeness_score),
+    technical_accuracy_score: readScore(raw.technical_accuracy_score),
+    clarity_score: readScore(raw.clarity_score),
+    confidence_score: readScore(raw.confidence_score),
   };
 
   const overall_score = deriveOverallScore(scores, raw.overall_score);
@@ -111,40 +142,29 @@ function normalizeFeedback(raw) {
  * Used for GET /feedback/sessions/:sessionId/summary and to update
  * interview_sessions.overall_score once a session finishes grading.
  *
+ * Each metric averages only the rows that reported it, so one answer graded
+ * without a technical score does not pull the session's technical average
+ * toward zero. A metric no row reported comes back null.
+ *
+ * Callers are expected to pass only successfully graded rows — an answer the
+ * grader could not score at all belongs nowhere in this average.
+ *
  * @param {Array<object>} feedbackRows - rows with the 5 metric columns + overall_score
  * @returns {object}
  */
 function computeSessionAggregate(feedbackRows) {
-  if (!feedbackRows || feedbackRows.length === 0) {
-    return {
-      relevance_score: null,
-      completeness_score: null,
-      technical_accuracy_score: null,
-      clarity_score: null,
-      confidence_score: null,
-      overall_score: null,
-      response_count: 0,
-    };
-  }
+  const rows = feedbackRows || [];
 
-  const totals = { ...Object.fromEntries(METRICS.map((k) => [k, 0])), overall_score: 0 };
-
-  for (const row of feedbackRows) {
-    for (const key of METRICS) totals[key] += clampScore(row[key]);
-    totals.overall_score += clampScore(row.overall_score);
-  }
-
-  const count = feedbackRows.length;
-  const avg = (sum) => Math.round(sum / count);
+  const meanOfColumn = (key) => meanOfReported(rows.map((row) => readScore(row[key])));
 
   return {
-    relevance_score: avg(totals.relevance_score),
-    completeness_score: avg(totals.completeness_score),
-    technical_accuracy_score: avg(totals.technical_accuracy_score),
-    clarity_score: avg(totals.clarity_score),
-    confidence_score: avg(totals.confidence_score),
-    overall_score: avg(totals.overall_score),
-    response_count: count,
+    relevance_score: meanOfColumn('relevance_score'),
+    completeness_score: meanOfColumn('completeness_score'),
+    technical_accuracy_score: meanOfColumn('technical_accuracy_score'),
+    clarity_score: meanOfColumn('clarity_score'),
+    confidence_score: meanOfColumn('confidence_score'),
+    overall_score: meanOfColumn('overall_score'),
+    response_count: rows.length,
   };
 }
 
@@ -153,6 +173,7 @@ export {
   MIN_SCORE,
   MAX_SCORE,
   clampScore,
+  readScore,
   averageSubScores,
   deriveOverallScore,
   normalizeFeedback,
@@ -164,6 +185,7 @@ export default {
   MIN_SCORE,
   MAX_SCORE,
   clampScore,
+  readScore,
   averageSubScores,
   deriveOverallScore,
   normalizeFeedback,
