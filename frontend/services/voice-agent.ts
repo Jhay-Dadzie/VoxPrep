@@ -126,6 +126,8 @@ export class VoiceAgentConnection {
 
   private readonly options: AgentConnectionOptions
   private closed = false
+  /** Becomes true only after the gateway has received the authenticated start message. */
+  private serverStarted = false
   private micOpen = false
 
   /**
@@ -147,9 +149,12 @@ export class VoiceAgentConnection {
   async start(): Promise<void> {
     await this.loadAudioApi()
     await this.prepareAudioSession()
-    await this.openSocket()
+    // Prepare both native audio paths before opening the socket. The agent can
+    // send its greeting immediately after the start message, so playback and
+    // capture must already be ready when that message is sent.
     this.startPlayback()
     this.startCapture()
+    await this.openSocket()
   }
 
   /**
@@ -182,6 +187,7 @@ export class VoiceAgentConnection {
   stop(): void {
     if (this.closed) return
     this.closed = true
+    this.serverStarted = false
 
     if (this.drainTimer) clearTimeout(this.drainTimer)
 
@@ -258,6 +264,7 @@ export class VoiceAgentConnection {
           voice: this.options.voice,
           max_questions: this.options.maxQuestions,
         })
+        this.serverStarted = true
         resolve()
       }
 
@@ -315,7 +322,10 @@ export class VoiceAgentConnection {
     this.context = new AudioContext({ sampleRate: AGENT_SAMPLE_RATE })
     this.queue = this.context.createBufferQueueSource()
     this.queue.connect(this.context.destination)
-    this.queue.start()
+    // react-native-audio-api's queue source defaults its offset to -1, but
+    // the native wrapper rejects negative offsets. Passing an explicit zero
+    // starts playback immediately and keeps the first streamed frame audible.
+    this.queue.start(0, 0)
   }
 
   /**
@@ -368,7 +378,7 @@ export class VoiceAgentConnection {
     const recorder = new AudioRecorder()
     this.recorder = recorder
 
-    recorder.onAudioReady(
+    const audioReadyResult = recorder.onAudioReady(
       { sampleRate: MIC_SAMPLE_RATE, bufferLength: MIC_FRAME_SAMPLES, channelCount: 1 },
       (event) => {
         if (this.closed) return
@@ -381,21 +391,34 @@ export class VoiceAgentConnection {
         const muted = !CAN_BARGE_IN && Date.now() < this.agentAudioUntil + ECHO_TAIL_MS
         if (muted) {
           if (this.micOpen) this.micOpen = false
+          // Keep sending binary PCM while the speaker is active. Zeroed frames
+          // keep Deepgram's input stream alive without sending the interviewer's
+          // voice back as candidate speech.
+          if (this.serverStarted && this.socket?.readyState === WebSocket.OPEN) {
+            this.socket.send(new ArrayBuffer(samples.length * 2))
+          }
           return
         }
         this.micOpen = true
 
-        if (this.socket?.readyState === WebSocket.OPEN) {
+        if (this.serverStarted && this.socket?.readyState === WebSocket.OPEN) {
           this.socket.send(floatToPcm16(samples))
         }
       }
     )
 
+    if (audioReadyResult.status === 'error') {
+      throw new Error(`Could not start microphone capture: ${audioReadyResult.message}`)
+    }
+
     recorder.onError(() => {
       this.options.onEvent({ type: 'error', message: 'The microphone stopped working.' })
     })
 
-    recorder.start()
+    const startResult = recorder.start()
+    if (startResult.status === 'error') {
+      throw new Error(`Could not start microphone capture: ${startResult.message}`)
+    }
   }
 }
 

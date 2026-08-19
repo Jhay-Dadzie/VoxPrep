@@ -27,20 +27,9 @@ import {
   scoreBand,
   scoreToPercent,
 } from '@/lib/format'
+import { feedbackInsights, toneBg, toneColor } from '@/lib/feedback-view'
 
 type Colours = typeof Colors.light
-
-const toneColor = (tone: ReturnType<typeof scoreBand>['tone'], colors: Colours) =>
-  tone === 'success' ? colors.success : tone === 'warning' ? colors.warning : tone === 'danger' ? colors.danger : colors.muted
-
-const toneBg = (tone: ReturnType<typeof scoreBand>['tone'], colors: Colours) =>
-  tone === 'success'
-    ? colors.successBg
-    : tone === 'warning'
-      ? colors.warningBg
-      : tone === 'danger'
-        ? colors.dangerBg
-        : colors.inputBg
 
 export default function HistoryDetailScreen() {
   const colorScheme = useColorScheme()
@@ -502,14 +491,7 @@ function QuestionCard({ question, colors }: { question: HistoryQuestion; colors:
     .filter(Boolean)
     .join(' • ')
 
-  const insights = feedback
-    ? [
-        { label: 'STRENGTHS', text: feedback.strengths },
-        { label: 'IMPROVEMENTS', text: feedback.improvements },
-        { label: 'SUGGESTIONS', text: feedback.suggestions },
-        { label: 'FOLLOW-UP TIP', text: feedback.follow_up_tip },
-      ].filter((entry): entry is { label: string; text: string } => Boolean(entry.text))
-    : []
+  const insights = feedbackInsights(feedback)
 
   return (
     <View style={[styles.qCard, { backgroundColor: colors.card }]}>
@@ -605,14 +587,19 @@ function QuestionCard({ question, colors }: { question: HistoryQuestion; colors:
                   <Ionicons name="sparkles" size={14} color={accent} />
                   <ThemedText style={[styles.insightTag, { color: accent }]}>AI INSIGHT</ThemedText>
                 </View>
-                {insights.map((entry) => (
-                  <View key={entry.label} style={{ marginTop: 6 }}>
+                {insights.map((section) => (
+                  <View key={section.label} style={{ marginTop: 6 }}>
                     <ThemedText style={[styles.insightSubTag, { color: colors.subtext }]}>
-                      {entry.label}
+                      {section.label}
                     </ThemedText>
-                    <ThemedText style={[styles.insightText, { color: colors.oppositeColor }]}>
-                      {entry.text}
-                    </ThemedText>
+                    {section.items.map((item, index) => (
+                      <ThemedText
+                        key={`${section.label}-${index}`}
+                        style={[styles.insightText, { color: colors.oppositeColor }]}
+                      >
+                        {section.items.length > 1 ? `• ${item}` : item}
+                      </ThemedText>
+                    ))}
                   </View>
                 ))}
               </View>
