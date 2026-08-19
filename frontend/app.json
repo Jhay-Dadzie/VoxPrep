@@ -9,7 +9,11 @@
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.jhaydadzie.voxprep",
+      "infoPlist": {
+        "NSMicrophoneUsageDescription": "Allow VoxPrep to use the microphone so you can speak with your interviewer."
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -19,7 +23,8 @@
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
       "edgeToEdgeEnabled": true,
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "package": "com.jhaydadzie.voxprep"
     },
     "web": {
       "output": "static",
@@ -41,15 +46,29 @@
       ],
       "expo-font",
       [
-        "expo-audio",
+        "react-native-audio-api",
         {
-          "microphonePermission": "Allow VoxPrep to use the microphone for interview practice."
+          "iosMicrophonePermission": "Allow VoxPrep to use the microphone so you can speak with your interviewer.",
+          "androidPermissions": [
+            "android.permission.RECORD_AUDIO",
+            "android.permission.MODIFY_AUDIO_SETTINGS",
+            "android.permission.INTERNET"
+          ],
+          "androidForegroundService": false,
+          "iosBackgroundMode": false
         }
       ]
     ],
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
-    }
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "359339b9-a220-4d34-8de8-1f2b2c5b3009"
+      }
+    },
+    "owner": "jhay-dadzie"
   }
 }
