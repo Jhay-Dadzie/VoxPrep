@@ -69,9 +69,13 @@ function RunningSession({
     mode: modeId,
     voice: panelist?.voiceId,
     maxQuestions: prepared?.maxQuestions,
+    // Results are one screen further on. The CV step sits between because it
+    // is the one moment the job description, a graded interview and the
+    // candidate's attention all exist at once — and it hands off to results
+    // whether they take it or skip it.
     onFinished: () => {
       clearPreparedSession()
-      router.replace({ pathname: '/(tabs)/results', params: { sessionId } })
+      router.replace({ pathname: '/cv-tailor', params: { sessionId } })
     },
   })
 
