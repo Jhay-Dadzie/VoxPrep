@@ -30,7 +30,8 @@ function RootLayoutInner() {
       segments[0] === 'history' ||
       segments[0] === 'countdown' ||
       segments[0] === 'questions-ready' ||
-      segments[0] === 'interview-session'
+      segments[0] === 'interview-session' ||
+      segments[0] === 'cv-tailor'
     ) return
 
     if (!isSignedIn) {
@@ -58,6 +59,7 @@ function RootLayoutInner() {
         <Stack.Screen name="countdown" options={{ presentation: 'fullScreenModal', animation: 'fade' }} />
         <Stack.Screen name="questions-ready" options={{ presentation: 'transparentModal', animation: 'fade' }} />
         <Stack.Screen name="interview-session" options={{ animation: 'fade' }} />
+        <Stack.Screen name="cv-tailor" options={{ animation: 'fade' }} />
         <Stack.Screen name="settings" />
         <Stack.Screen name="history" />
       </Stack>
