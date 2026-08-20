@@ -113,6 +113,80 @@ export const interviewTurnSchema = {
 };
 
 /**
+ * Structured-output schema for a tailored CV.
+ *
+ * Only the fields the renderer cannot do without are `required`. A CV with no
+ * projects section is normal, and forcing the model to emit one is exactly the
+ * pressure that makes it invent projects — the opposite of what the prompt
+ * spends its length forbidding.
+ */
+export const tailoredCvSchema = {
+  type: "object",
+  properties: {
+    full_name: { type: "string" },
+    headline: { type: "string" },
+    contact: {
+      type: "object",
+      properties: {
+        email: { type: "string" },
+        phone: { type: "string" },
+        location: { type: "string" },
+        links: { type: "array", items: { type: "string" } },
+      },
+    },
+    summary: { type: "string" },
+    skills: { type: "array", items: { type: "string" } },
+    experience: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          role: { type: "string" },
+          company: { type: "string" },
+          location: { type: "string" },
+          start_date: { type: "string" },
+          end_date: { type: "string" },
+          bullets: { type: "array", items: { type: "string" } },
+        },
+        required: ["role", "company", "bullets"],
+      },
+    },
+    education: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          qualification: { type: "string" },
+          institution: { type: "string" },
+          location: { type: "string" },
+          start_date: { type: "string" },
+          end_date: { type: "string" },
+          details: { type: "string" },
+        },
+        required: ["qualification", "institution"],
+      },
+    },
+    projects: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          name: { type: "string" },
+          description: { type: "string" },
+          bullets: { type: "array", items: { type: "string" } },
+        },
+        required: ["name"],
+      },
+    },
+    certifications: { type: "array", items: { type: "string" } },
+    tailoring_notes: { type: "array", items: { type: "string" } },
+    keywords_matched: { type: "array", items: { type: "string" } },
+    gaps: { type: "array", items: { type: "string" } },
+  },
+  required: ["full_name", "summary", "skills", "experience", "tailoring_notes"],
+};
+
+/**
  * Failures worth retrying on a different model rather than surfacing.
  *
  *   429 — the quota for THIS model is spent; another model has its own.

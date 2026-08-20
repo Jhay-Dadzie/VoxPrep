@@ -19,3 +19,10 @@ const upload = multer({
 });
 
 export const uploadJobDocument = upload.single('document');
+
+/**
+ * A candidate's CV, on the tailoring flow. Same limits and same accepted types
+ * as a job document — a separate field name only so the two uploads read
+ * distinctly at the call site and in client code.
+ */
+export const uploadCvDocument = upload.single('cv');
