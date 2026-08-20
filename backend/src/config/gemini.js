@@ -62,6 +62,19 @@ export const GEMINI_TTS_MODEL = process.env.GEMINI_TTS_MODEL || "gemini-3.1-flas
  */
 export const GEMINI_ASSESSMENT_MODEL = process.env.GEMINI_ASSESSMENT_MODEL || "gemini-2.5-flash";
 
+/**
+ * CV tailoring. Runs once, after the interview is already over, on a much
+ * longer input than any other job here — a whole CV plus the job description.
+ * Given its own model for the same per-model-quota reason as the rest: a user
+ * who tailors two CVs should not find their next interview rate-limited.
+ */
+export const GEMINI_CV_MODEL = process.env.GEMINI_CV_MODEL || "gemini-3.6-flash";
+
+export const GEMINI_CV_FALLBACKS = modelList(
+  process.env.GEMINI_CV_FALLBACKS,
+  ["gemini-2.5-flash", "gemini-flash-latest"]
+);
+
 export const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 
 export const GEMINI_ENDPOINT =
