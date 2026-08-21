@@ -1,4 +1,4 @@
-import { resolveMode } from '../interviews/modes.js';
+import { resolveMode, resolvePanelSize } from '../interviews/modes.js';
 
 /**
  * The interviewer's standing instructions for a live voice conversation.
@@ -41,7 +41,12 @@ export const buildGreeting = (jobData, modeId) => {
   const mode = resolveMode(modeId);
   const role = jobData?.title?.trim();
 
-  if (mode.id === 'oral_exam') {
+  if (mode.id === 'visa_interview') {
+    return `Good morning. Please pass your documents through — and while I look at them, tell me why you are travelling.`;
+  }
+  // Only reachable from an older client whose exam is still a spoken one — the
+  // exam mode is a written paper now and never opens this socket.
+  if (mode.id === 'exam') {
     return `Thanks for coming in. We'll go through ${role || 'the material'} together — to start, tell me in your own words what this topic is fundamentally about.`;
   }
   if (mode.id === 'viva_defense') {
@@ -51,16 +56,43 @@ export const buildGreeting = (jobData, modeId) => {
 };
 
 /**
+ * Who else is in the room.
+ *
+ * Only one voice ever speaks — swapping speakers mid-call would mean
+ * reconfiguring the agent between turns — so a panel is carried in the prompt
+ * instead: the speaker chairs it and questions on its behalf. That is close to
+ * how a real panel sounds anyway, where the chair does most of the talking.
+ */
+const buildPanelBrief = (panelSize) => {
+  if (panelSize <= 1) return '';
+
+  return `
+WHO IS IN THE ROOM
+
+You chair a panel of ${panelSize}, and you are the only one who speaks — your colleagues pass you their questions rather than asking them out loud.
+
+- Ask on the panel's behalf, not only your own. Occasionally attribute a question to a colleague ("My colleague would want to know...") — sparingly, no more than every few turns.
+- Cover the angles a panel of ${panelSize} would between them, rather than following one line of enquiry the whole way.
+- Never invent a colleague's name, and never narrate the panel conferring.
+`;
+};
+
+/**
  * Build the system prompt handed to the agent at connect time.
  *
  * @param {object} jobData - title, company_name, job_content, key_skills, ...
  * @param {object} [context]
  * @param {number} [context.maxQuestions] - ceiling the closing instruction refers to
  * @param {string} [context.mode] - practice mode id; shapes persona and coverage
+ * @param {number} [context.panelSize] - how many people the candidate faces
  * @param {string} [context.candidateName]
  */
-export const buildAgentPrompt = (jobData, { maxQuestions = 15, mode: modeId, candidateName } = {}) => {
+export const buildAgentPrompt = (
+  jobData,
+  { maxQuestions = 15, mode: modeId, panelSize, candidateName } = {}
+) => {
   const mode = resolveMode(modeId);
+  const panel = resolvePanelSize(modeId, panelSize);
   const skills = Array.isArray(jobData?.key_skills) && jobData.key_skills.length
     ? jobData.key_skills.join(', ')
     : 'not specified';
@@ -82,7 +114,7 @@ ${candidateName ? `Candidate: ${candidateName}` : ''}
 --- SOURCE MATERIAL ---
 ${truncate(jobData?.job_content)}
 --- END SOURCE MATERIAL ---
-
+${buildPanelBrief(panel)}
 HOW TO SPEAK
 
 You are being heard, not read. Everything you say is spoken aloud the instant you say it.

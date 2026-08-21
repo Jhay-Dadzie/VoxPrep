@@ -42,7 +42,7 @@ export class AgentSession {
    * @param {string} deps.sessionId
    * @param {string} deps.userId
    * @param {object} deps.jobData - the session's job description row
-   * @param {object} [deps.options] - mode, voice, maxQuestions, candidateName
+   * @param {object} [deps.options] - mode, voice, panelSize, maxQuestions, candidateName
    */
   constructor({ client, sessionId, userId, jobData, options = {} }) {
     this.client = client;
@@ -106,6 +106,7 @@ export class AgentSession {
         buildAgentSettings(this.jobData, {
           mode: this.options.mode,
           voice: this.options.voice,
+          panelSize: this.options.panelSize,
           maxQuestions: this.maxQuestions,
           candidateName: this.options.candidateName,
         })

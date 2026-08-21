@@ -37,10 +37,14 @@ export const resolveAgentVoice = (voice) => {
  * @param {object} [options]
  * @param {string} [options.mode] - practice mode id
  * @param {string} [options.voice] - panelist voice id
+ * @param {number} [options.panelSize] - how many people the candidate faces
  * @param {number} [options.maxQuestions]
  * @param {string} [options.candidateName]
  */
-export const buildAgentSettings = (jobData, { mode, voice, maxQuestions = 15, candidateName } = {}) => ({
+export const buildAgentSettings = (
+  jobData,
+  { mode, voice, panelSize, maxQuestions = 15, candidateName } = {}
+) => ({
   type: 'Settings',
   audio: {
     input: { encoding: AGENT_AUDIO_ENCODING, sample_rate: AGENT_INPUT_SAMPLE_RATE },
@@ -53,7 +57,7 @@ export const buildAgentSettings = (jobData, { mode, voice, maxQuestions = 15, ca
     listen: { provider: { type: 'deepgram', model: AGENT_LISTEN_MODEL } },
     think: {
       provider: { type: AGENT_THINK_PROVIDER, model: AGENT_THINK_MODEL },
-      prompt: buildAgentPrompt(jobData, { maxQuestions, mode, candidateName }),
+      prompt: buildAgentPrompt(jobData, { maxQuestions, mode, panelSize, candidateName }),
     },
     speak: { provider: { type: 'deepgram', model: resolveAgentVoice(voice) } },
     greeting: buildGreeting(jobData, mode),

@@ -4,6 +4,7 @@ import { getCurrentTestUser, shouldUseTestAuth } from '../auth/auth.store.js';
 import { info, warn, error as logError } from '../../core/errors/logger.js';
 import { hasAgentCredentials } from '../../config/deepgram-agent.js';
 import { MAX_SESSION_QUESTIONS, loadSessionContext } from '../interviews/interview.service.js';
+import { resolvePanelSize } from '../interviews/modes.js';
 import { AgentSession } from './agent.session.js';
 
 /**
@@ -122,6 +123,14 @@ const onConnection = (socket) => {
       return;
     }
 
+    // Written papers are answered by tapping, not by talking. Nothing in the app
+    // opens this socket for one; a client that does is asking for a voice
+    // session that has no questions to speak.
+    if (context.session.session_kind === 'exam') {
+      reject(socket, CLOSE_FORBIDDEN, 'This session is a written exam and has no voice interview.');
+      return;
+    }
+
     const jobData = context.session.job_descriptions;
     if (!jobData?.job_content) {
       reject(socket, CLOSE_FORBIDDEN, 'This session has no source material to interview from.');
@@ -143,6 +152,9 @@ const onConnection = (socket) => {
       options: {
         mode: msg.mode,
         voice: msg.voice,
+        // Clamped against the mode: a visa interview is one officer whatever
+        // the client asks for.
+        panelSize: resolvePanelSize(msg.mode, msg.panel_size),
         maxQuestions,
         candidateName: msg.candidate_name,
       },
