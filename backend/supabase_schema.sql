@@ -242,6 +242,37 @@ CREATE TABLE IF NOT EXISTS session_statistics (
 CREATE INDEX idx_session_statistics_user_id ON session_statistics(user_id);
 CREATE INDEX idx_session_statistics_session_id ON session_statistics(session_id);
 
+-- A candidate's CV, rewritten by the AI against one job description. Offered at
+-- the end of an interview, since the job description is already on file.
+--
+-- Note what is absent: the text extracted from the uploaded CV. It is the most
+-- sensitive data this feature touches — full employment history, address, phone
+-- number — and nothing downstream needs it once the model has read it, so it is
+-- never written down. Only the length is kept, for support and diagnostics.
+CREATE TABLE IF NOT EXISTS tailored_cvs (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE ON UPDATE CASCADE,
+  session_id UUID REFERENCES interview_sessions(id) ON DELETE CASCADE ON UPDATE CASCADE,
+  job_description_id UUID REFERENCES job_descriptions(id) ON DELETE SET NULL ON UPDATE CASCADE,
+
+  source_file_name VARCHAR(255), -- what the candidate uploaded, for display only
+  source_char_count INTEGER,     -- length of the extracted text; the text itself is not stored
+
+  tailored_document JSONB NOT NULL, -- the CV: summary, skills, experience, education, ...
+  tailoring_notes TEXT[],           -- what the AI changed, and why it helps for this job
+  keywords_matched TEXT[],          -- job-description terms the tailored CV now evidences
+  gaps TEXT[],                      -- requirements the CV does not evidence, stated honestly
+
+  ai_model_used VARCHAR(100),
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_tailored_cvs_user_id ON tailored_cvs(user_id);
+CREATE INDEX idx_tailored_cvs_session_id ON tailored_cvs(session_id);
+-- The read path is "the latest CV for this session", so the index carries the ordering.
+CREATE INDEX idx_tailored_cvs_session_created ON tailored_cvs(session_id, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS reminders (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE ON UPDATE CASCADE,
@@ -408,6 +439,7 @@ ALTER TABLE feedback ENABLE ROW LEVEL SECURITY;
 ALTER TABLE session_statistics ENABLE ROW LEVEL SECURITY;
 ALTER TABLE reminders ENABLE ROW LEVEL SECURITY;
 ALTER TABLE user_statistics ENABLE ROW LEVEL SECURITY;
+ALTER TABLE tailored_cvs ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY users_select_own ON users
   FOR SELECT USING (auth.uid() = id);
@@ -481,6 +513,16 @@ CREATE POLICY reminders_update_own ON reminders
  
 CREATE POLICY user_statistics_select_own ON user_statistics
   FOR SELECT USING (auth.uid() = user_id);
+
+-- Users can only see and create their own tailored CVs
+CREATE POLICY tailored_cvs_select_own ON tailored_cvs
+  FOR SELECT USING (auth.uid() = user_id);
+
+CREATE POLICY tailored_cvs_insert_own ON tailored_cvs
+  FOR INSERT WITH CHECK (auth.uid() = user_id);
+
+CREATE POLICY tailored_cvs_delete_own ON tailored_cvs
+  FOR DELETE USING (auth.uid() = user_id);
 
 CREATE OR REPLACE VIEW user_interview_history AS
 SELECT
