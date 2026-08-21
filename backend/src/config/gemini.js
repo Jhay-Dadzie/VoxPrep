@@ -68,7 +68,7 @@ export const GEMINI_ASSESSMENT_MODEL = process.env.GEMINI_ASSESSMENT_MODEL || "g
  * Given its own model for the same per-model-quota reason as the rest: a user
  * who tailors two CVs should not find their next interview rate-limited.
  */
-export const GEMINI_CV_MODEL = process.env.GEMINI_CV_MODEL || "gemini-3.6-flash";
+export const GEMINI_CV_MODEL = process.env.GEMINI_CV_MODEL || "gemini-3.5-flash";
 
 export const GEMINI_CV_FALLBACKS = modelList(
   process.env.GEMINI_CV_FALLBACKS,

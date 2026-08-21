@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, View } from 'react-native'
+import { ActivityIndicator, Platform, Pressable, ScrollView, StyleSheet, View } from 'react-native'
 import { LinearGradient } from 'expo-linear-gradient'
 import { Ionicons } from '@expo/vector-icons'
 import { router, useLocalSearchParams } from 'expo-router'
@@ -9,7 +9,7 @@ import { ThemedText } from '@/components/themed-text'
 import { useColorScheme } from '@/hooks/use-color-scheme'
 import { Colors } from '@/constants/theme'
 import { cvService } from '@/services/cv'
-import { downloadTailoredCv } from '@/lib/cv-pdf'
+import { downloadTailoredCv, shareTailoredCv, type CvDownloadResult } from '@/lib/cv-pdf'
 import type { TailoredCv } from '@/types/cv'
 import type { PickedDocument } from '@/types/interview'
 
@@ -55,8 +55,9 @@ export default function CvTailor() {
   const [document, setDocument] = useState<PickedDocument | null>(null)
   const [result, setResult] = useState<TailoredCv | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [isDownloading, setIsDownloading] = useState(false)
-  const [didDownload, setDidDownload] = useState(false)
+  const [busyAction, setBusyAction] = useState<'download' | 'share' | null>(null)
+  /** What happened last time, so the button can confirm it rather than just reset. */
+  const [saved, setSaved] = useState<CvDownloadResult | null>(null)
 
   const mounted = useRef(true)
   useEffect(() => {
@@ -147,21 +148,33 @@ export default function CvTailor() {
     await tailor(picked)
   }, [tailor])
 
-  const download = useCallback(async () => {
-    if (!result) return
+  /**
+   * Save the CV, or send it somewhere — two separate intents, one code path.
+   *
+   * A cancelled folder picker is recorded as nothing having happened: the
+   * candidate backed out on purpose, and telling them that failed would be
+   * inventing a problem.
+   */
+  const exportCv = useCallback(
+    async (action: 'download' | 'share') => {
+      if (!result) return
 
-    setIsDownloading(true)
-    setError(null)
+      setBusyAction(action)
+      setError(null)
 
-    try {
-      await downloadTailoredCv(result.document)
-      if (mounted.current) setDidDownload(true)
-    } catch (err: any) {
-      if (mounted.current) setError(err?.message || 'Could not create the PDF. Please try again.')
-    } finally {
-      if (mounted.current) setIsDownloading(false)
-    }
-  }, [result])
+      try {
+        const outcome = await (action === 'download' ? downloadTailoredCv : shareTailoredCv)(
+          result.document
+        )
+        if (mounted.current && outcome.outcome !== 'cancelled') setSaved(outcome)
+      } catch (err: any) {
+        if (mounted.current) setError(err?.message || 'Could not create the PDF. Please try again.')
+      } finally {
+        if (mounted.current) setBusyAction(null)
+      }
+    },
+    [result]
+  )
 
   // No session to tailor against: there is nothing to offer, so don't ask.
   useEffect(() => {
@@ -191,10 +204,11 @@ export default function CvTailor() {
           <ReadyStep
             colors={colors}
             result={result}
-            isDownloading={isDownloading}
-            didDownload={didDownload}
+            busyAction={busyAction}
+            saved={saved}
             error={error}
-            onDownload={download}
+            onDownload={() => exportCv('download')}
+            onShare={() => exportCv('share')}
             onContinue={goToResults}
           />
         ) : (
@@ -355,21 +369,28 @@ function OfferStep({
 function ReadyStep({
   colors,
   result,
-  isDownloading,
-  didDownload,
+  busyAction,
+  saved,
   error,
   onDownload,
+  onShare,
   onContinue,
 }: {
   colors: Colours
   result: TailoredCv
-  isDownloading: boolean
-  didDownload: boolean
+  busyAction: 'download' | 'share' | null
+  saved: CvDownloadResult | null
   error: string | null
   onDownload: () => void
+  onShare: () => void
   onContinue: () => void
 }) {
   const { document } = result
+
+  // iOS has no user-visible Downloads folder — "Save to Files" is what the
+  // system calls this, and calling it "Download" would promise a location the
+  // platform does not have.
+  const downloadLabel = Platform.OS === 'ios' ? 'Save to Files' : 'Download as PDF'
 
   return (
     <>
@@ -448,34 +469,62 @@ function ReadyStep({
 
       {error ? <ErrorBox colors={colors} message={error} /> : null}
 
+      {/* Where the file actually went. The whole point of writing it into a
+          folder instead of firing a share sheet is that the answer is
+          knowable — so it gets said. */}
+      {saved && saved.outcome === 'saved' ? (
+        <View style={[styles.savedBox, { backgroundColor: colors.successBg }]}>
+          <Ionicons name="checkmark-circle" size={16} color={colors.success} />
+          <ThemedText style={{ color: colors.oppositeColor, fontSize: 13, flex: 1 }}>
+            Saved <ThemedText style={{ fontWeight: '700' }}>{saved.fileName}</ThemedText> to{' '}
+            {saved.folder}.
+          </ThemedText>
+        </View>
+      ) : null}
+
       <Pressable
         style={[styles.cta, { backgroundColor: colors.tint, marginBottom: 12 }]}
         onPress={onDownload}
-        disabled={isDownloading}
+        disabled={busyAction != null}
       >
-        {isDownloading ? (
+        {busyAction === 'download' ? (
           <>
             <ActivityIndicator color="#fff" size="small" />
             <ThemedText style={styles.ctaText}>Preparing PDF...</ThemedText>
           </>
         ) : (
           <>
-            <Ionicons name={didDownload ? 'checkmark' : 'download-outline'} size={18} color="#fff" />
+            <Ionicons name="download-outline" size={18} color="#fff" />
+            {/* Only a real write to a folder earns "another copy" — a share
+                that went to WhatsApp did not save anything to this device. */}
             <ThemedText style={styles.ctaText}>
-              {didDownload ? 'Download again' : 'Download as PDF'}
+              {saved?.outcome === 'saved' ? 'Save another copy' : downloadLabel}
             </ThemedText>
           </>
         )}
       </Pressable>
 
       <Pressable
-        style={[styles.secondaryCta, { borderColor: colors.border, backgroundColor: colors.card }]}
-        onPress={onContinue}
+        style={[styles.secondaryCta, { borderColor: colors.border, backgroundColor: colors.card, marginBottom: 12 }]}
+        onPress={onShare}
+        disabled={busyAction != null}
       >
-        <ThemedText style={{ color: colors.oppositeColor, fontWeight: '700', fontSize: 15 }}>
+        {busyAction === 'share' ? (
+          <ActivityIndicator color={colors.oppositeColor} size="small" />
+        ) : (
+          <>
+            <Ionicons name="share-outline" size={16} color={colors.oppositeColor} />
+            <ThemedText style={{ color: colors.oppositeColor, fontWeight: '700', fontSize: 15 }}>
+              Send it somewhere
+            </ThemedText>
+          </>
+        )}
+      </Pressable>
+
+      <Pressable style={styles.ghostCta} onPress={onContinue}>
+        <ThemedText style={{ color: colors.subtext, fontWeight: '600' }}>
           Continue to my results
         </ThemedText>
-        <Ionicons name="arrow-forward" size={16} color={colors.oppositeColor} />
       </Pressable>
     </>
   )
@@ -533,6 +582,7 @@ const styles = StyleSheet.create({
   },
 
   errorBox: { flexDirection: 'row', alignItems: 'center', gap: 8, padding: 12, borderRadius: 10, marginTop: 14, marginBottom: 4 },
+  savedBox: { flexDirection: 'row', alignItems: 'center', gap: 8, padding: 12, borderRadius: 10, marginBottom: 14 },
 
   cta: { borderRadius: 999, height: 54, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, marginTop: 4 },
   ctaText: { color: '#fff', fontWeight: '700', fontSize: 15 },

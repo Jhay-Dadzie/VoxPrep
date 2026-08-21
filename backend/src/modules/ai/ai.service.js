@@ -200,6 +200,19 @@ export const tailoredCvSchema = {
  */
 const RETRYABLE_STATUS = new Set([429, 500, 503, 404]);
 
+// A request that is reset before Gemini sends an HTTP response has no status
+// for callGemini() to inspect. Treat the common transport failures as a
+// temporary upstream outage so the caller can try the next configured model.
+const RETRYABLE_NETWORK_CODES = new Set([
+  "ECONNRESET",
+  "ECONNABORTED",
+  "ETIMEDOUT",
+  "EAI_AGAIN",
+  "ENETUNREACH",
+]);
+
+const GEMINI_TIMEOUT_MS = Number.parseInt(process.env.GEMINI_TIMEOUT_MS || "60000", 10);
+
 /** One generateContent call against one model. */
 const requestGemini = async ({ model, messages, generationConfig }) => {
   try {
@@ -215,6 +228,9 @@ const requestGemini = async ({ model, messages, generationConfig }) => {
           "Content-Type": "application/json",
           "x-goog-api-key": GEMINI_API_KEY,
         },
+        timeout: Number.isFinite(GEMINI_TIMEOUT_MS) && GEMINI_TIMEOUT_MS > 0
+          ? GEMINI_TIMEOUT_MS
+          : 60000,
       }
     );
 
@@ -232,7 +248,26 @@ const requestGemini = async ({ model, messages, generationConfig }) => {
 
     return text;
   } catch (error) {
-    if (!error.response) throw error;
+    // Axios errors caused by a dropped connection do not have a response, so
+    // preserve the useful code while giving the fallback loop a retryable
+    // status. Do not classify local parsing/empty-response errors as transport
+    // failures — those are deliberately created inside this try block too.
+    const isTransportError =
+      axios.isAxiosError(error) || RETRYABLE_NETWORK_CODES.has(error?.code);
+
+    if (!error.response) {
+      if (!isTransportError) throw error;
+
+      const transport = new Error(
+        error.code === "ECONNRESET"
+          ? "The Gemini connection was reset before the CV could be tailored"
+          : "The Gemini service could not be reached while tailoring the CV"
+      );
+      transport.statusCode = 503;
+      transport.code = error.code;
+      transport.details = { code: error.code, message: error.message };
+      throw transport;
+    }
 
     const apiError = error.response.data?.error || error.response.data || {};
     const surfaced = new Error(
