@@ -76,6 +76,8 @@ export type AgentConnectionOptions = {
   sessionId: string
   mode?: ModeId
   voice?: string
+  /** How many people the candidate is facing; the voice above chairs them. */
+  panelSize?: number
   maxQuestions?: number
   onEvent: (event: AgentEvent) => void
   /** Mic level 0–1 for the waveform, sampled per frame. */
@@ -262,6 +264,7 @@ export class VoiceAgentConnection {
           session_id: this.options.sessionId,
           mode: this.options.mode,
           voice: this.options.voice,
+          panel_size: this.options.panelSize,
           max_questions: this.options.maxQuestions,
         })
         this.serverStarted = true

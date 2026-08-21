@@ -15,6 +15,7 @@ import authRoutes from './modules/auth/auth.routes.js';
 import userRoutes from './modules/users/user.routes.js'
 import jobDescriptionRoutes from './modules/jobDescription/jobDescription.routes.js'
 import interviewSessionsRoutes from './modules/interviews/interview.routes.js'
+import examRoutes from './modules/exams/exam.routes.js'
 import questionRoutes from './modules/questions/question.routes.js'
 import responseRoutes from './modules/responses/response.routes.js'
 import speechRoutes from './modules/speech/speech.routes.js'
@@ -115,6 +116,7 @@ app.use('/api/v1/auth', authRoutes)
 app.use('/api/v1/users', userRoutes)
 app.use('/api/v1/job-descriptions', jobDescriptionRoutes)
 app.use('/api/v1/interviews', interviewSessionsRoutes)
+app.use('/api/v1/exams', examRoutes)
 app.use('/api/v1/questions', questionRoutes)
 app.use('/api/v1/responses', responseRoutes)
 app.use('/api/v1/speech', speechRoutes)
