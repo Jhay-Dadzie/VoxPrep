@@ -113,6 +113,11 @@ CREATE TABLE IF NOT EXISTS interview_sessions (
   job_description_id UUID REFERENCES job_descriptions(id) ON DELETE SET NULL ON UPDATE CASCADE,
   session_title VARCHAR(255),
   status VARCHAR(50) DEFAULT 'in_progress', -- 'in_progress', 'completed', 'paused'
+  -- What kind of session this is. Spoken sessions ('interview') hang their
+  -- questions off interview_questions; written ones ('exam') off exam_questions.
+  -- History and the dashboard count both and read this to send the user to the
+  -- right review screen.
+  session_kind VARCHAR(20) NOT NULL DEFAULT 'interview',
   total_questions INTEGER DEFAULT 0,
   questions_answered INTEGER DEFAULT 0,
   overall_score DECIMAL(5, 2), -- Out of 100
@@ -121,12 +126,14 @@ CREATE TABLE IF NOT EXISTS interview_sessions (
   duration_seconds INTEGER, -- Total interview duration
   is_archived BOOLEAN DEFAULT false,
   notes TEXT, -- User notes about the session
-  
+
   CONSTRAINT status_valid CHECK (status IN ('in_progress', 'completed', 'paused')),
+  CONSTRAINT session_kind_valid CHECK (session_kind IN ('interview', 'exam')),
   CONSTRAINT score_valid CHECK (overall_score IS NULL OR (overall_score >= 0 AND overall_score <= 100))
 );
- 
+
 CREATE INDEX idx_interview_sessions_user_id ON interview_sessions(user_id);
+CREATE INDEX idx_interview_sessions_kind ON interview_sessions(user_id, session_kind);
 CREATE INDEX idx_interview_sessions_status ON interview_sessions(status);
 CREATE INDEX idx_interview_sessions_started_at ON interview_sessions(started_at DESC);
 CREATE INDEX idx_interview_sessions_user_status ON interview_sessions(user_id, status);
@@ -151,6 +158,57 @@ CREATE TABLE IF NOT EXISTS interview_questions (
 CREATE INDEX idx_interview_questions_session_id ON interview_questions(session_id);
 CREATE INDEX idx_interview_questions_question_number ON interview_questions(session_id, question_number);
 CREATE INDEX idx_interview_questions_type ON interview_questions(question_type);
+
+-- One question on a written exam paper, with its options and marking scheme.
+--
+-- Separate from interview_questions because an exam question is not an
+-- interview question with extra columns: it is answered by choosing rather than
+-- by speaking, and it is marked arithmetically rather than by a model. Sharing
+-- a table would put four always-null columns on every interview row.
+--
+-- `options` is JSONB because options are never queried or joined on — they are
+-- read and written as one unit with the question, and always in full.
+-- Shape: [{ "label": "A", "text": "..." }].
+CREATE TABLE IF NOT EXISTS exam_questions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  session_id UUID NOT NULL REFERENCES interview_sessions(id) ON DELETE CASCADE ON UPDATE CASCADE,
+  question_number INTEGER NOT NULL, -- Order on the paper
+  question_text TEXT NOT NULL,
+  options JSONB NOT NULL,
+  correct_option VARCHAR(2) NOT NULL, -- Label of the correct option, e.g. 'C'
+  explanation TEXT,                   -- Why that option is correct, shown after marking
+  topic VARCHAR(120),                 -- Which part of the material this came from
+  difficulty_level VARCHAR(50) DEFAULT 'medium',
+  ai_model_used VARCHAR(100),
+  generated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+
+  UNIQUE (session_id, question_number),
+  CONSTRAINT exam_question_text_length CHECK (LENGTH(question_text) > 0),
+  CONSTRAINT exam_difficulty_valid CHECK (difficulty_level IN ('easy', 'medium', 'hard'))
+);
+
+CREATE INDEX idx_exam_questions_session ON exam_questions(session_id, question_number);
+
+-- What the student selected, one row per question.
+--
+-- is_correct is written at marking time rather than derived on every read: the
+-- paper it was marked against is what the result must keep reporting, even if a
+-- question is later corrected. Null means the paper has not been marked yet.
+CREATE TABLE IF NOT EXISTS exam_answers (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  question_id UUID NOT NULL REFERENCES exam_questions(id) ON DELETE CASCADE ON UPDATE CASCADE,
+  session_id UUID NOT NULL REFERENCES interview_sessions(id) ON DELETE CASCADE ON UPDATE CASCADE,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE ON UPDATE CASCADE,
+  selected_option VARCHAR(2) NOT NULL,
+  is_correct BOOLEAN,
+  answered_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+
+  -- A student has one answer per question. Changing their mind updates this row.
+  UNIQUE (question_id)
+);
+
+CREATE INDEX idx_exam_answers_session ON exam_answers(session_id);
+CREATE INDEX idx_exam_answers_user ON exam_answers(user_id);
 
 CREATE TABLE IF NOT EXISTS user_responses (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -440,6 +498,8 @@ ALTER TABLE session_statistics ENABLE ROW LEVEL SECURITY;
 ALTER TABLE reminders ENABLE ROW LEVEL SECURITY;
 ALTER TABLE user_statistics ENABLE ROW LEVEL SECURITY;
 ALTER TABLE tailored_cvs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE exam_questions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE exam_answers ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY users_select_own ON users
   FOR SELECT USING (auth.uid() = id);
@@ -523,6 +583,25 @@ CREATE POLICY tailored_cvs_insert_own ON tailored_cvs
 
 CREATE POLICY tailored_cvs_delete_own ON tailored_cvs
   FOR DELETE USING (auth.uid() = user_id);
+
+-- Students can only see questions from their own papers
+CREATE POLICY exam_questions_select_own ON exam_questions
+  FOR SELECT USING (
+    EXISTS (
+      SELECT 1 FROM interview_sessions
+      WHERE interview_sessions.id = exam_questions.session_id
+      AND interview_sessions.user_id = auth.uid()
+    )
+  );
+
+CREATE POLICY exam_answers_select_own ON exam_answers
+  FOR SELECT USING (auth.uid() = user_id);
+
+CREATE POLICY exam_answers_insert_own ON exam_answers
+  FOR INSERT WITH CHECK (auth.uid() = user_id);
+
+CREATE POLICY exam_answers_update_own ON exam_answers
+  FOR UPDATE USING (auth.uid() = user_id);
 
 CREATE OR REPLACE VIEW user_interview_history AS
 SELECT

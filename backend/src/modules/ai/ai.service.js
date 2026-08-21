@@ -87,6 +87,56 @@ export const questionSchema = {
 };
 
 /**
+ * Structured-output schema for a multiple-choice exam paper.
+ *
+ * `correct_option` is a label rather than an index because an index invites the
+ * two failure modes that are hardest to detect after the fact: an off-by-one
+ * between the model's counting and ours, and a paper whose answer is silently
+ * always the first option. A label has to match one of the options the model
+ * itself emitted, which the generator can check.
+ */
+export const examSchema = {
+  type: "object",
+  properties: {
+    questions: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          question_text: { type: "string" },
+          options: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                label: { type: "string" },
+                text: { type: "string" },
+              },
+              required: ["label", "text"],
+            },
+          },
+          correct_option: { type: "string" },
+          explanation: { type: "string" },
+          topic: { type: "string" },
+          difficulty_level: {
+            type: "string",
+            enum: ["easy", "medium", "hard"],
+          },
+        },
+        required: [
+          "question_text",
+          "options",
+          "correct_option",
+          "explanation",
+          "difficulty_level",
+        ],
+      },
+    },
+  },
+  required: ["questions"],
+};
+
+/**
  * Structured-output schema for one live interviewer turn.
  *
  * `action` is what the session loop branches on, so it is constrained rather
