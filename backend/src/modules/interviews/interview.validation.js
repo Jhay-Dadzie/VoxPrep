@@ -1,6 +1,6 @@
 // src/modules/interviews/interviewSession.validation.js
 import Joi from 'joi';
-import { MODE_IDS } from './modes.js';
+import { ACCEPTED_MODE_IDS } from './modes.js';
 
 export const createSessionValidation = Joi.object({
   job_description_id: Joi.string().uuid().optional().allow(null),
@@ -42,7 +42,7 @@ export const addQuestionValidation = Joi.object({
  * server's ceiling in the service, so a client cannot ask for more than 15.
  */
 export const nextTurnValidation = Joi.object({
-  mode: Joi.string().valid(...MODE_IDS).optional(),
+  mode: Joi.string().valid(...ACCEPTED_MODE_IDS).optional(),
   max_questions: Joi.number().integer().min(1).max(15).optional(),
   candidate_name: Joi.string().trim().max(120).allow('', null).optional(),
 });
@@ -68,7 +68,7 @@ export const prepareSessionValidation = Joi.object({
   // Accepted and ignored: questions are no longer generated up front. Kept so
   // an older client build's setup request is not rejected outright.
   questionCount: Joi.number().integer().min(1).max(20).optional(),
-  mode: Joi.string().valid(...MODE_IDS).optional(),
+  mode: Joi.string().valid(...ACCEPTED_MODE_IDS).optional(),
   session_title: Joi.string().trim().max(255).allow('', null).optional(),
 });
 

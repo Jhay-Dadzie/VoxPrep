@@ -173,7 +173,7 @@ export const nextTurn = asyncHandler(async (req, res, next) => {
     if (/not found or access denied/i.test(err.message)) {
       return next(new AppError('Interview session not found', 404));
     }
-    if (/already been completed|no source material/i.test(err.message)) {
+    if (/already been completed|no source material|written exam/i.test(err.message)) {
       return next(new AppError(err.message, 400));
     }
     return next(err);

@@ -3,6 +3,9 @@ export const mapSessionToResponse = (session) => ({
   id: session.id,
   session_title: session.session_title,
   status: session.status,
+  // 'interview' or 'exam'. Defaulted rather than passed through so a session
+  // read before the session_kind migration ran still names its own kind.
+  session_kind: session.session_kind || 'interview',
   job_description_id: session.job_description_id,
   total_questions: session.total_questions,
   questions_answered: session.questions_answered,
@@ -40,6 +43,7 @@ export const mapSessionDetailToResponse = (session) => ({
   id: session.id,
   session_title: session.session_title,
   status: session.status,
+  session_kind: session.session_kind || 'interview',
   started_at: session.started_at,
   completed_at: session.completed_at,
   duration_seconds: session.duration_seconds,

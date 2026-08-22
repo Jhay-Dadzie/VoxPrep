@@ -450,7 +450,7 @@ export const loadSessionContext = async (sessionId, userId) => {
   const { data: session, error: sessionError } = await supabase
     .from('interview_sessions')
     .select(`
-      id, status, total_questions, questions_answered,
+      id, status, session_kind, total_questions, questions_answered,
       job_descriptions (
         title, company_name, job_content, key_skills,
         required_experience_level, industry
@@ -519,6 +519,12 @@ export const nextTurn = async (sessionId, userId, { mode = null, maxQuestions, c
 
   if (session.status === 'completed') {
     throw new Error('This interview has already been completed');
+  }
+
+  // A written paper has no interviewer to take a turn. Reachable only from a
+  // client that opened an exam session against the interview loop.
+  if (session.session_kind === 'exam') {
+    throw new Error('This session is a written exam, not an interview');
   }
 
   const jobData = session.job_descriptions;
