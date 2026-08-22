@@ -14,13 +14,42 @@
  * The `id` values must stay in sync with MODE_IDS on the backend.
  */
 
-export type ModeId = 'job_interview' | 'oral_exam' | 'viva_defense'
+import { PANEL_SIZES, type PanelSize } from './interviewers'
+
+export type ModeId = 'job_interview' | 'exam' | 'viva_defense' | 'visa_interview'
+
+/**
+ * How a mode is sat.
+ *
+ * 'voice' modes are spoken conversations with an AI interviewer. 'written' modes
+ * are multiple-choice papers: no microphone, no interviewer, no per-answer
+ * feedback — a score out of 100 and the reasoning behind each answer.
+ *
+ * Screens branch on this rather than on the mode id, so the exam flow does not
+ * have to be taught about every new mode that joins it.
+ */
+export type ModeFormat = 'voice' | 'written'
 
 export type ModeSource = {
   label: string
   placeholder: string
   minLength: number
   optional?: boolean
+}
+
+/**
+ * How many people may sit opposite the user in this mode.
+ *
+ * Most modes leave it open, but a consular interview is conducted by a single
+ * officer behind a window — offering a panel there would be rehearsing an event
+ * that does not happen. The constraint lives here rather than in the practice
+ * screen so the filter and the session read it from the same place.
+ */
+export type ModePanel = {
+  /** Selectable panel sizes, smallest first. */
+  sizes: PanelSize[]
+  /** Shown under the panel filter whenever the mode narrows the choice. */
+  note?: string
 }
 
 /**
@@ -99,18 +128,73 @@ export type SampleQuestion = {
   insight: string
 }
 
+/**
+ * The shape of a written paper. Present only on 'written' modes.
+ *
+ * The count is fixed rather than chosen: a student sitting an exam expects to
+ * know how long it is, and the server sets the same number, so the two must
+ * agree. Treat this as display copy — the paper the server returns is the one
+ * that counts, and a short one (thin source material) is rendered as it comes.
+ */
+export type ModePaper = {
+  questionCount: number
+  optionCount: number
+}
+
+/**
+ * Whether this mode lets the user pick who questions them.
+ *
+ * A written paper has nobody reading it aloud, so the panel-size and voice
+ * filters are not narrowed for exams — they are switched off. The note explains
+ * why, because a control that greys out with no reason given reads as broken.
+ */
+export type ModeInterviewerChoice = {
+  enabled: boolean
+  note?: string
+}
+
 export type Mode = {
   id: ModeId
   label: string
   tagline: string
   /** Ionicons name, used on the picker card and as the mode badge glyph. */
   icon: string
+  /** Spoken conversation, or written paper — see ModeFormat. */
+  format: ModeFormat
   source: ModeSource
   /** Only job_interview takes a second document (the CV). */
   secondarySource: ModeSource | null
+  /** Panel sizes this mode allows — see ModePanel. */
+  panel: ModePanel
+  /** Whether the interviewer filters apply at all — see ModeInterviewerChoice. */
+  interviewerChoice: ModeInterviewerChoice
+  /**
+   * Whether to offer a tailored CV when the session ends.
+   *
+   * Only where the source material is a job description. A consular officer's
+   * questions and a syllabus are not something a CV can be rewritten against,
+   * and offering it there sends the user to a screen that cannot help them.
+   */
+  offersCvTailoring: boolean
+  /** Set on written modes only. */
+  paper?: ModePaper
   copy: ModeCopy
+  /** Strings only the exam screens use. Set on written modes only. */
+  examCopy?: ExamCopy
   sampleSessions: SampleSession[]
   sampleQuestions: SampleQuestion[]
+}
+
+/** Wording for the exam-only screens: sitting the paper, and reading the marks. */
+export type ExamCopy = {
+  /** Shown while the paper is being written. It is the slowest wait in the app. */
+  generatingNote: string
+  /** Sub-heading on the review step, before the paper is submitted. */
+  reviewSubtitle: string
+  /** The button that marks the paper. */
+  submitCta: string
+  /** Shown under the score once the paper is marked. */
+  resultsSubtitle: string
 }
 
 export const MODES: Record<ModeId, Mode> = {
@@ -119,6 +203,7 @@ export const MODES: Record<ModeId, Mode> = {
     label: 'Job Interview',
     tagline: 'Practice for a role you are applying to',
     icon: 'briefcase-outline',
+    format: 'voice',
     source: {
       label: 'Job Description',
       placeholder:
@@ -131,6 +216,10 @@ export const MODES: Record<ModeId, Mode> = {
       minLength: 0,
       optional: true,
     },
+    panel: { sizes: PANEL_SIZES },
+    interviewerChoice: { enabled: true },
+    // The only mode whose source material is a job description.
+    offersCvTailoring: true,
     copy: {
       welcomeTitle: 'Welcome to VoxPrep!',
       welcomeSubtitle:
@@ -202,11 +291,20 @@ export const MODES: Record<ModeId, Mode> = {
     ],
   },
 
-  oral_exam: {
-    id: 'oral_exam',
-    label: 'Oral Exam',
-    tagline: 'Practice explaining course material out loud',
+  /**
+   * The one written mode: a thirty-question multiple-choice paper.
+   *
+   * It shares the mode picker and the source material with the spoken modes and
+   * nothing else. No microphone, no interviewer, no per-answer AI critique —
+   * questions are answered by tapping, and the paper is marked out of 100 the
+   * way an exam is, with the reasoning shown afterwards for every question.
+   */
+  exam: {
+    id: 'exam',
+    label: 'Exam',
+    tagline: 'Sit a 30-question paper on your material',
     icon: 'school-outline',
+    format: 'written',
     source: {
       label: 'Syllabus or Notes',
       placeholder:
@@ -214,37 +312,54 @@ export const MODES: Record<ModeId, Mode> = {
       minLength: 120,
     },
     secondarySource: null,
+    panel: { sizes: PANEL_SIZES },
+    // Nobody reads a written paper aloud, so these filters do not apply at all.
+    interviewerChoice: {
+      enabled: false,
+      note: 'An exam is a written paper you answer by tapping, so there is no interviewer to choose and no voice to hear.',
+    },
+    offersCvTailoring: false,
+    paper: { questionCount: 30, optionCount: 4 },
     copy: {
       welcomeTitle: 'Welcome to VoxPrep!',
       welcomeSubtitle:
-        'Ready to ace your next exam? Practice explaining your material out loud and find the gaps before your examiner does.',
-      firstSessionCta: 'Start Your First Session',
+        'Ready to ace your next exam? Sit a paper on your own material and find the gaps before your examiner does.',
+      firstSessionCta: 'Sit Your First Exam',
       returningPrompt: 'Ready for your next exam?',
-      practiceCta: 'Start Practice Session',
-      emptyHistory: 'No exam practice yet',
+      practiceCta: 'Start an Exam',
+      emptyHistory: 'No exams sat yet',
       upcomingLabel: 'Next Exam',
-      recentSessionsLabel: 'Recent Sessions',
-      sessionsCompletedLabel: 'Sessions Completed',
+      recentSessionsLabel: 'Recent Exams',
+      sessionsCompletedLabel: 'Exams Completed',
       setupTitle: 'What are you being examined on?',
-      setupSubtitle: 'Your questions are generated strictly from this material.',
-      setupInfoNote: 'AI will analyze key concepts, definitions, and how they connect.',
+      setupSubtitle: 'Your paper is set strictly from this material.',
+      setupInfoNote: 'AI will set 30 multiple-choice questions on the concepts, definitions and examples in it.',
       setupPromoTitle: 'Ready to ace your next exam?',
-      setupPromoBody: 'Explain your material out loud and hear where it falls apart.',
-      questionTag: 'CONCEPT QUESTION',
-      listeningLabel: 'AI Examiner Listening',
-      replayLabel: 'Replay Question',
-      submitLabel: 'Stop & Submit',
-      resultsTitle: 'Exam Feedback',
-      resultsHeroTitle: 'Exam Practice Complete!',
-      resultsHeroSubtitle: "You've successfully finished your practice session with our AI examiner.",
+      setupPromoBody: 'Sit a full paper on your own notes and see exactly where you stand.',
+      questionTag: 'QUESTION',
+      listeningLabel: 'Choose one answer',
+      replayLabel: 'Previous Question',
+      submitLabel: 'Complete Exam',
+      resultsTitle: 'Exam Results',
+      resultsHeroTitle: 'Exam Complete!',
+      resultsHeroSubtitle: 'Your paper has been marked. Here is how you did.',
       structureCheckLabel: 'Concept Coverage',
-      retakeCta: 'Retake Practice',
-      sessionNoun: 'exam practice',
-      sessionNounPlural: 'exam sessions',
+      retakeCta: 'Sit a New Paper',
+      sessionNoun: 'exam',
+      sessionNounPlural: 'exams',
       proTip:
-        'Paste the exact material you are being examined on. Questions are drawn strictly from it, so the closer it is to your syllabus, the more useful the practice.',
+        'Paste the exact material you are being examined on. Every question is set from it, so the closer it is to your syllabus, the more your score means.',
       sampleInsight:
-        "Your explanations are getting clearer, but you're still skipping over definitions. Try stating the concept before applying it.",
+        'You score well on definitions but lose marks where two concepts have to be told apart. Those are worth a second pass.',
+    },
+    examCopy: {
+      generatingNote:
+        'Setting your paper — reading your material and writing 30 questions takes up to a minute.',
+      reviewSubtitle:
+        'Check your answers before you submit. Tap any question to go back to it — nothing is marked until you complete the exam.',
+      submitCta: 'Complete Exam',
+      resultsSubtitle:
+        'Every question is below with the right answer and why it is right. Wrong answers are marked in red.',
     },
     sampleSessions: [
       { icon: 'flask', title: 'Organic Chemistry', meta: '2 days ago • 15 mins', score: 92, tone: 'success' },
@@ -290,6 +405,7 @@ export const MODES: Record<ModeId, Mode> = {
     label: 'Viva / Defense',
     tagline: 'Rehearse defending your own project',
     icon: 'document-text-outline',
+    format: 'voice',
     source: {
       label: 'Project Proposal or Abstract',
       placeholder:
@@ -297,6 +413,9 @@ export const MODES: Record<ModeId, Mode> = {
       minLength: 120,
     },
     secondarySource: null,
+    panel: { sizes: PANEL_SIZES },
+    interviewerChoice: { enabled: true },
+    offersCvTailoring: false,
     copy: {
       welcomeTitle: 'Welcome to VoxPrep!',
       welcomeSubtitle:
@@ -367,13 +486,149 @@ export const MODES: Record<ModeId, Mode> = {
       },
     ],
   },
+
+  visa_interview: {
+    id: 'visa_interview',
+    label: 'Visa Interview',
+    tagline: 'Rehearse the questions a consular officer will ask',
+    icon: 'airplane-outline',
+    format: 'voice',
+    source: {
+      label: 'Application Details',
+      placeholder:
+        'Paste your visa type and destination, purpose of travel, who is funding it, your school or employer, and your ties to home...',
+      minLength: 120,
+    },
+    secondarySource: null,
+    // A consular interview is one officer at one window. Offering a panel here
+    // would be rehearsing an event that does not happen.
+    panel: {
+      sizes: [1],
+      note: 'A visa interview is always conducted by a single consular officer, so the panel is fixed at one.',
+    },
+    interviewerChoice: { enabled: true },
+    // A consular officer is not hiring, so there is no CV to tailor.
+    offersCvTailoring: false,
+    copy: {
+      welcomeTitle: 'Welcome to VoxPrep!',
+      welcomeSubtitle:
+        'Ready for your embassy appointment? Practise the questions a consular officer asks — and how briefly they expect them answered.',
+      firstSessionCta: 'Start Your First Session',
+      returningPrompt: 'Ready for your next visa interview?',
+      practiceCta: 'Start Practice Session',
+      emptyHistory: 'No visa practice yet',
+      upcomingLabel: 'Next Appointment',
+      recentSessionsLabel: 'Recent Sessions',
+      sessionsCompletedLabel: 'Sessions Completed',
+      setupTitle: 'What visa are you applying for?',
+      setupSubtitle: 'Your questions are generated from these details.',
+      setupInfoNote: 'AI will analyze your purpose of travel, funding, and ties to home.',
+      setupPromoTitle: 'Ready for the window?',
+      setupPromoBody: 'Answer a consular officer out loud before you face one.',
+      questionTag: 'CONSULAR QUESTION',
+      listeningLabel: 'Consular Officer Listening',
+      replayLabel: 'Replay Question',
+      submitLabel: 'Stop & Submit',
+      resultsTitle: 'Visa Interview Feedback',
+      resultsHeroTitle: 'Visa Practice Complete!',
+      resultsHeroSubtitle:
+        "You've successfully finished your mock interview with our AI consular officer.",
+      structureCheckLabel: 'Answer Consistency',
+      retakeCta: 'Retake Session',
+      sessionNoun: 'visa interview',
+      sessionNounPlural: 'visa interviews',
+      proTip:
+        'Officers decide in a couple of minutes. Practise answering in one or two clear sentences — long, rehearsed-sounding answers work against you.',
+      sampleInsight:
+        'Your answers on funding are clear, but your stated return plans keep shifting. Consistency is what an officer is listening for.',
+    },
+    sampleSessions: [
+      { icon: 'school', title: 'Student Visa (F-1)', meta: '2 days ago • 15 mins', score: 92, tone: 'success' },
+      { icon: 'briefcase', title: 'Work Visa', meta: '5 days ago • 22 mins', score: 74, tone: 'warning' },
+      { icon: 'people', title: 'Visitor Visa', meta: '1 week ago • 10 mins', score: 48, tone: 'danger' },
+    ],
+    sampleQuestions: [
+      {
+        n: '01',
+        title: '"Why did you choose this particular school and course?"',
+        meta: 'Purpose of Travel • 2m 15s',
+        score: '9/10',
+        badge: 'Exceptional',
+        tone: 'success',
+        insight:
+          'You named specific reasons tied to your background rather than praising the country, which is exactly the right instinct. Keep it to two sentences — officers read length as rehearsal.',
+      },
+      {
+        n: '02',
+        title: '"Who is sponsoring your trip, and what do they do?"',
+        meta: 'Funding • 3m 40s',
+        score: '6/10',
+        badge: 'Needs Work',
+        tone: 'warning',
+        insight:
+          'Your figures did not match what you said earlier about your sponsor\'s income. Officers cross-check answers against each other and against your forms. State one clear, consistent set of numbers.',
+      },
+      {
+        n: '03',
+        title: '"What will you do when your studies are finished?"',
+        meta: 'Ties to Home • 1m 50s',
+        score: '8.5/10',
+        badge: 'Strong',
+        tone: 'success',
+        insight:
+          'Good — you gave a concrete plan at home rather than a vague intention to return. Naming the family, property, or job waiting for you would make the tie harder to doubt.',
+      },
+    ],
+  },
 }
 
 /** Picker order — viva sits second because it is the strongest demo. */
-export const MODE_LIST: Mode[] = [MODES.job_interview, MODES.viva_defense, MODES.oral_exam]
+export const MODE_LIST: Mode[] = [
+  MODES.job_interview,
+  MODES.viva_defense,
+  MODES.exam,
+  MODES.visa_interview,
+]
 
 export const DEFAULT_MODE: ModeId = 'job_interview'
 
+/**
+ * Mode ids this build no longer has, mapped to what replaced them.
+ *
+ * `oral_exam` was a spoken examiner before the exam became a written paper. It
+ * is still in local storage on an installed app, and dropping the user back to
+ * the default mode on upgrade would silently change what they are preparing for.
+ */
+const LEGACY_MODE_IDS: Record<string, ModeId> = { oral_exam: 'exam' }
+
+/** The current id for a stored or wire value, following any rename. */
+export function normalizeModeId(id: string | null | undefined): string | null | undefined {
+  return id && id in LEGACY_MODE_IDS ? LEGACY_MODE_IDS[id] : id
+}
+
 export function isValidMode(id: string | null | undefined): id is ModeId {
-  return !!id && id in MODES
+  const normalized = normalizeModeId(id)
+  return !!normalized && normalized in MODES
+}
+
+/** True when this mode is a written paper rather than a spoken session. */
+export function isWrittenMode(id: ModeId): boolean {
+  return MODES[id].format === 'written'
+}
+
+/** The panel sizes the practice screen may offer for a mode. */
+export function allowedPanelSizes(id: ModeId): PanelSize[] {
+  return MODES[id].panel.sizes
+}
+
+/**
+ * Bring a panel size back inside what the mode allows.
+ *
+ * Called whenever the mode changes: someone who had a panel of four selected
+ * and then switches to a visa interview must end up on one officer, not on a
+ * size the session could not honour.
+ */
+export function clampPanelSize(id: ModeId, size: PanelSize): PanelSize {
+  const sizes = allowedPanelSizes(id)
+  return sizes.includes(size) ? size : sizes[0]
 }

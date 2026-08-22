@@ -41,11 +41,20 @@ type Options = {
   sessionId: string
   mode?: ModeId
   voice?: string
+  /** How many people the candidate is facing; the speaker chairs them. */
+  panelSize?: number
   maxQuestions?: number
   onFinished: () => void
 }
 
-export function useAgentSession({ sessionId, mode, voice, maxQuestions, onFinished }: Options) {
+export function useAgentSession({
+  sessionId,
+  mode,
+  voice,
+  panelSize,
+  maxQuestions,
+  onFinished,
+}: Options) {
   const [phase, setPhase] = useState<AgentPhase>('connecting')
   const [error, setError] = useState<string | null>(null)
   const [transcript, setTranscript] = useState<TranscriptLine[]>([])
@@ -163,6 +172,7 @@ export function useAgentSession({ sessionId, mode, voice, maxQuestions, onFinish
       sessionId,
       mode,
       voice,
+      panelSize,
       maxQuestions,
       onEvent,
       onLevel: (level) => {
@@ -198,7 +208,7 @@ export function useAgentSession({ sessionId, mode, voice, maxQuestions, onFinish
       agent.stop()
       connection.current = null
     }
-  }, [sessionId, mode, voice, maxQuestions, onEvent])
+  }, [sessionId, mode, voice, panelSize, maxQuestions, onEvent])
 
   // ── Controls ───────────────────────────────────────────────────────────────
 

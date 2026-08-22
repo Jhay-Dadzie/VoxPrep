@@ -1,6 +1,14 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from 'react'
 import AsyncStorage from '@react-native-async-storage/async-storage'
-import { DEFAULT_MODE, isValidMode, MODES, type Mode, type ModeCopy, type ModeId } from '@/constants/modes'
+import {
+  DEFAULT_MODE,
+  isValidMode,
+  MODES,
+  normalizeModeId,
+  type Mode,
+  type ModeCopy,
+  type ModeId,
+} from '@/constants/modes'
 
 /**
  * Practice mode as app-level context.
@@ -39,8 +47,13 @@ export function ModeProvider({ children }: { children: React.ReactNode }) {
       try {
         const stored = await AsyncStorage.getItem(STORAGE_KEY)
         if (cancelled) return
-        if (isValidMode(stored)) {
-          setModeId(stored)
+
+        // Follows a rename before validating, so an upgraded install keeps the
+        // mode it was already on rather than being sent back to the picker.
+        const current = normalizeModeId(stored)
+        if (isValidMode(current)) {
+          setModeId(current)
+          if (current !== stored) AsyncStorage.setItem(STORAGE_KEY, current).catch(() => {})
         } else {
           // Nothing stored, or a mode id from an older build that no longer exists.
           setNeedsSelection(true)

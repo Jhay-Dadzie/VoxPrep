@@ -85,6 +85,26 @@ export const scoreToPercent = (score: number | null | undefined): number => {
   return Math.max(0, Math.min(1, score / 100))
 }
 
+/**
+ * How a marked exam is labelled.
+ *
+ * Deliberately not scoreBand(): an interview is judged on how well it was
+ * handled, so "Exceptional" and "Needs Work" fit it. A paper is judged on how
+ * many marks were earned, and a student reads that as a grade — so this returns
+ * one, on the familiar 40/50/60/70 boundaries, with a pass mark rather than a
+ * verdict on their performance.
+ */
+export const examGrade = (
+  score: number | null | undefined
+): { letter: string; label: string; tone: 'success' | 'warning' | 'danger' | 'muted' } => {
+  if (score == null) return { letter: '--', label: 'Not marked', tone: 'muted' }
+  if (score >= 70) return { letter: 'A', label: 'Distinction', tone: 'success' }
+  if (score >= 60) return { letter: 'B', label: 'Merit', tone: 'success' }
+  if (score >= 50) return { letter: 'C', label: 'Pass', tone: 'success' }
+  if (score >= 40) return { letter: 'D', label: 'Marginal pass', tone: 'warning' }
+  return { letter: 'F', label: 'Fail', tone: 'danger' }
+}
+
 /** Shared verdict wording so every screen labels the same score identically. */
 export const scoreBand = (
   score: number | null | undefined
