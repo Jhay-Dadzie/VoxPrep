@@ -6,6 +6,11 @@
  * four-person panel and a one-on-one job interview are the same pipeline with
  * different voices attached.
  *
+ * The user picks along two axes — how many people, and whether the person
+ * leading is a man or a woman — and resolveInterviewerId() turns that pair into
+ * one of the rosters below. The rosters stay explicit rather than being
+ * assembled on the fly so that each one is a deliberate mix of seats and voices.
+ *
  * The voice ids are what the backend maps to TTS voices, so they must stay in
  * sync with the voice table in backend/src/modules/interviews/voices.js. The
  * avatars here are placeholders and are expected to be replaced with generated
@@ -16,13 +21,21 @@ import type { ImageSourcePropType } from 'react-native'
 
 export type Gender = 'male' | 'female'
 
+/** How many people sit opposite the user. One is a one-on-one. */
+export type PanelSize = 1 | 2 | 3 | 4
+
+/** Every selectable size, smallest first — also the filter's chip order. */
+export const PANEL_SIZES: PanelSize[] = [1, 2, 3, 4]
+
 export type InterviewerId =
   | 'single_male'
   | 'single_female'
   | 'panel_two'
+  | 'panel_two_alt'
   | 'panel_three'
   | 'panel_three_alt'
   | 'panel_four'
+  | 'panel_four_alt'
 
 export type Panelist = {
   /** Stable key, and the id the backend resolves to a TTS voice. */
@@ -65,6 +78,15 @@ export type Interviewer = {
   tagline: string
   /** Ionicons name, used on the picker card and the session badge. */
   icon: string
+  /** How many people are on it — matches members.length. */
+  size: PanelSize
+  /**
+   * The gender the user asked for.
+   *
+   * On a one-on-one it is simply the interviewer. On a panel it is whoever
+   * chairs, and who therefore opens, holds the session and speaks most.
+   */
+  leadGender: Gender
   /** True when more than one voice asks questions. */
   isPanel: boolean
   /** What the session screen shows while the user is speaking. */
@@ -158,9 +180,11 @@ const ELENA: Panelist = {
 export const INTERVIEWERS: Record<InterviewerId, Interviewer> = {
   single_male: {
     id: 'single_male',
-    label: 'Male interviewer',
+    label: 'One interviewer',
     tagline: 'One voice, measured and direct. Best for focused one-on-one practice.',
     icon: 'person-outline',
+    size: 1,
+    leadGender: 'male',
     isPanel: false,
     listeningLabel: 'AI Interviewer Listening',
     members: [BENJAMIN],
@@ -168,9 +192,11 @@ export const INTERVIEWERS: Record<InterviewerId, Interviewer> = {
 
   single_female: {
     id: 'single_female',
-    label: 'Female interviewer',
+    label: 'One interviewer',
     tagline: 'One voice, warm and conversational. Best for focused one-on-one practice.',
     icon: 'person-outline',
+    size: 1,
+    leadGender: 'female',
     isPanel: false,
     listeningLabel: 'AI Interviewer Listening',
     members: [{ ...ROSEMARY, role: 'Interviewer' }],
@@ -180,11 +206,25 @@ export const INTERVIEWERS: Record<InterviewerId, Interviewer> = {
   panel_two: {
     id: 'panel_two',
     label: 'Panel of two',
-    tagline: 'One chairs, one presses on the detail. The easiest panel to start with.',
+    tagline: 'She chairs, he presses on the detail. The easiest panel to start with.',
     icon: 'people-outline',
+    size: 2,
+    leadGender: 'female',
     isPanel: true,
     listeningLabel: 'AI Panel Listening',
     members: [NADIA, RYAN],
+  },
+
+  panel_two_alt: {
+    id: 'panel_two_alt',
+    label: 'Panel of two',
+    tagline: 'He chairs, she presses on the detail. The easiest panel to start with.',
+    icon: 'people-outline',
+    size: 2,
+    leadGender: 'male',
+    isPanel: true,
+    listeningLabel: 'AI Panel Listening',
+    members: [TOM, PRIYA],
   },
 
   panel_three: {
@@ -192,18 +232,22 @@ export const INTERVIEWERS: Record<InterviewerId, Interviewer> = {
     label: 'Panel of three',
     tagline: 'Mixed panel taking turns, chaired by a woman. Questions come from different angles.',
     icon: 'people-outline',
+    size: 3,
+    leadGender: 'female',
     isPanel: true,
     listeningLabel: 'AI Panel Listening',
     members: [ROSEMARY, MARCUS, PRIYA],
   },
 
-  // Same size as panel_three, opposite gender balance. Kept as a separate
-  // option rather than a toggle so the picker stays a flat list of rosters.
+  // Same size as panel_three, opposite chair. Kept as a separate roster rather
+  // than a swap at render time so each panel is a deliberate mix of seats.
   panel_three_alt: {
     id: 'panel_three_alt',
     label: 'Panel of three',
     tagline: 'Mixed panel taking turns, chaired by a man. Questions come from different angles.',
     icon: 'people-outline',
+    size: 3,
+    leadGender: 'male',
     isPanel: true,
     listeningLabel: 'AI Panel Listening',
     members: [TOM, HASSAN, ELENA],
@@ -212,29 +256,83 @@ export const INTERVIEWERS: Record<InterviewerId, Interviewer> = {
   panel_four: {
     id: 'panel_four',
     label: 'Panel of four',
-    tagline: 'The full board, including an external examiner. The hardest setting.',
+    tagline: 'The full board, chaired by a woman, with an external examiner. The hardest setting.',
     icon: 'people-circle-outline',
+    size: 4,
+    leadGender: 'female',
     isPanel: true,
     listeningLabel: 'AI Panel Listening',
     members: [ROSEMARY, MARCUS, PRIYA, DAVID],
   },
+
+  panel_four_alt: {
+    id: 'panel_four_alt',
+    label: 'Panel of four',
+    tagline: 'The full board, chaired by a man, with an external examiner. The hardest setting.',
+    icon: 'people-circle-outline',
+    size: 4,
+    leadGender: 'male',
+    isPanel: true,
+    listeningLabel: 'AI Panel Listening',
+    members: [TOM, HASSAN, ELENA, { ...NADIA, role: 'External' }],
+  },
 }
 
-/** Picker order — singles first, then panels by size, easiest to hardest. */
-export const INTERVIEWER_LIST: Interviewer[] = [
-  INTERVIEWERS.single_male,
-  INTERVIEWERS.single_female,
-  INTERVIEWERS.panel_two,
-  INTERVIEWERS.panel_three,
-  INTERVIEWERS.panel_three_alt,
-  INTERVIEWERS.panel_four,
-]
+/**
+ * The two filters, resolved to a roster.
+ *
+ * Every (size, gender) pair has an entry, so the panel-size filter and the
+ * gender filter can be moved independently without ever landing on a
+ * combination that does not exist.
+ */
+const ROSTER_BY_SIZE: Record<PanelSize, Record<Gender, InterviewerId>> = {
+  1: { male: 'single_male', female: 'single_female' },
+  2: { male: 'panel_two_alt', female: 'panel_two' },
+  3: { male: 'panel_three_alt', female: 'panel_three' },
+  4: { male: 'panel_four_alt', female: 'panel_four' },
+}
 
-/** Matches the first entry in INTERVIEWER_LIST, so the picker opens on it. */
+export const DEFAULT_PANEL_SIZE: PanelSize = 1
+export const DEFAULT_GENDER: Gender = 'male'
+
+/** Matches the defaults above, so the filters open on it. */
 export const DEFAULT_INTERVIEWER: InterviewerId = 'single_male'
 
 export function isValidInterviewer(id: string | null | undefined): id is InterviewerId {
   return !!id && id in INTERVIEWERS
+}
+
+export function isValidPanelSize(size: unknown): size is PanelSize {
+  return PANEL_SIZES.includes(size as PanelSize)
+}
+
+export function isValidGender(gender: unknown): gender is Gender {
+  return gender === 'male' || gender === 'female'
+}
+
+/** Turn the two filter values into the roster that will run the session. */
+export function resolveInterviewerId(size: PanelSize, gender: Gender): InterviewerId {
+  return ROSTER_BY_SIZE[size][gender]
+}
+
+export function resolveInterviewer(size: PanelSize, gender: Gender): Interviewer {
+  return INTERVIEWERS[resolveInterviewerId(size, gender)]
+}
+
+/**
+ * Read the filter values back out of a roster id.
+ *
+ * Used to migrate the id an older build stored, so a user who had picked a
+ * panel of three keeps it rather than being reset to a one-on-one.
+ */
+export function describeInterviewer(id: InterviewerId): { size: PanelSize; gender: Gender } {
+  const { size, leadGender } = INTERVIEWERS[id]
+  return { size, gender: leadGender }
+}
+
+/** "Panel of three" / "One interviewer" — the label for the current selection. */
+export function panelSizeLabel(size: PanelSize): string {
+  return size === 1 ? 'One-on-one' : `Panel of ${size === 2 ? 'two' : size === 3 ? 'three' : 'four'}`
 }
 
 /** "2 women, 1 man" — the gender split, for the panel card subtitle. */

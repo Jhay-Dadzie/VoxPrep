@@ -19,7 +19,7 @@ const pad = (n: number) => n.toString().padStart(2, '0')
 export default function InterviewSession() {
   const colorScheme = useColorScheme()
   const colors = Colors[colorScheme ?? 'light']
-  const { modeId, copy } = useMode()
+  const { modeId, mode, copy } = useMode()
   const { interviewer } = useInterviewer()
   const { sessionId } = useLocalSearchParams<{ sessionId: string }>()
 
@@ -39,6 +39,7 @@ export default function InterviewSession() {
       colors={colors}
       copy={copy}
       modeId={modeId}
+      offersCvTailoring={mode.offersCvTailoring}
       interviewer={interviewer}
     />
   )
@@ -49,17 +50,20 @@ function RunningSession({
   colors,
   copy,
   modeId,
+  offersCvTailoring,
   interviewer,
 }: {
   sessionId: string
   colors: typeof Colors.light
   copy: ReturnType<typeof useMode>['copy']
   modeId: ReturnType<typeof useMode>['modeId']
+  offersCvTailoring: boolean
   interviewer: ReturnType<typeof useInterviewer>['interviewer']
 }) {
   // One voice holds the call. A panel that swapped speakers mid-conversation
   // would mean reconfiguring the agent between turns, which is the round trip
-  // this whole architecture exists to avoid.
+  // this whole architecture exists to avoid — so the chair speaks throughout,
+  // and the panel's size is sent along so they can question on its behalf.
   const panelist = interviewer.members[0]
 
   const prepared = getPreparedSession(sessionId)
@@ -68,14 +72,21 @@ function RunningSession({
     sessionId,
     mode: modeId,
     voice: panelist?.voiceId,
+    panelSize: interviewer.size,
     maxQuestions: prepared?.maxQuestions,
-    // Results are one screen further on. The CV step sits between because it
-    // is the one moment the job description, a graded interview and the
-    // candidate's attention all exist at once — and it hands off to results
-    // whether they take it or skip it.
+    // For a job interview the CV step sits between the session and its
+    // results: it is the one moment the job description, a graded interview and
+    // the candidate's attention all exist at once, and it hands off to results
+    // whether they take it or skip it. Every other mode goes straight there —
+    // a syllabus and a consular officer's questions are not something a CV can
+    // be rewritten against.
     onFinished: () => {
       clearPreparedSession()
-      router.replace({ pathname: '/cv-tailor', params: { sessionId } })
+      router.replace(
+        offersCvTailoring
+          ? { pathname: '/cv-tailor', params: { sessionId } }
+          : { pathname: '/(tabs)/results', params: { sessionId } }
+      )
     },
   })
 
