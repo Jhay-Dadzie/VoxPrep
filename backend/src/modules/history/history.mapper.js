@@ -96,6 +96,8 @@ function toHistorySummary(session) {
     id: session.id,
     session_title: session.session_title,
     status: session.status,
+    // Which review screen this row opens: a marked paper, or a graded interview.
+    session_kind: session.session_kind ?? 'interview',
     job_title: session.job_descriptions?.title ?? null,
     company_name: session.job_descriptions?.company_name ?? null,
     total_questions: session.total_questions,
@@ -126,6 +128,7 @@ function toHistoryDetail(session) {
     id: session.id,
     session_title: session.session_title,
     status: session.status,
+    session_kind: session.session_kind ?? 'interview',
     started_at: toISO(session.started_at),
     completed_at: toISO(session.completed_at),
     duration_seconds: session.duration_seconds,

@@ -13,6 +13,16 @@ export type HistoryStatus = 'completed' | 'paused'
 
 export type HistorySort = 'recent' | 'oldest' | 'score_desc' | 'score_asc'
 
+/**
+ * Which kind of session a history row is.
+ *
+ * A written exam and a spoken interview are both sessions and both carry a
+ * score, but they are reviewed on different screens — an exam has no per-answer
+ * feedback to show and a marked paper to show instead. Rows without the field
+ * predate written exams and are interviews.
+ */
+export type HistoryKind = 'interview' | 'exam'
+
 export interface HistoryPagination {
   page: number
   limit: number
@@ -25,6 +35,7 @@ export interface HistorySummary {
   id: string
   session_title: string | null
   status: HistoryStatus
+  session_kind?: HistoryKind
   job_title: string | null
   company_name: string | null
   total_questions: number | null
@@ -89,6 +100,7 @@ export interface HistoryDetail {
   id: string
   session_title: string | null
   status: HistoryStatus
+  session_kind?: HistoryKind
   started_at: string | null
   completed_at: string | null
   duration_seconds: number | null
