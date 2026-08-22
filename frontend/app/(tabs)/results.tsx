@@ -6,6 +6,7 @@ import { router, useFocusEffect, useLocalSearchParams } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { ThemedText } from '@/components/themed-text'
 import { useColorScheme } from '@/hooks/use-color-scheme'
+import { useMode } from '@/hooks/mode-context'
 import { Colors } from '@/constants/theme'
 import { historyService } from '@/services/history'
 import { interviewService } from '@/services/interview'
@@ -20,6 +21,7 @@ type Colours = typeof Colors.light
 export default function Results() {
   const colorScheme = useColorScheme()
   const colors = Colors[colorScheme ?? 'light']
+  const { copy } = useMode()
   // Present when the user just finished an interview; absent when they simply
   // opened the Results tab, in which case the most recent session is shown.
   const { sessionId } = useLocalSearchParams<{ sessionId?: string }>()
@@ -62,7 +64,16 @@ export default function Results() {
       }
 
       const detail = await historyService.getById(id)
-      if (isMountedRef.current) setSession(detail)
+      if (!isMountedRef.current) return
+
+      // A written exam is reviewed as a marked paper, not as a graded
+      // interview: it has no per-answer feedback for this screen to render.
+      if (detail.session_kind === 'exam') {
+        router.replace({ pathname: '/exam-results', params: { sessionId: detail.id } })
+        return
+      }
+
+      setSession(detail)
     } catch (err) {
       if (isMountedRef.current) setError(toAuthError(err).message)
     } finally {
@@ -234,14 +245,16 @@ export default function Results() {
                 </View>
               ) : null}
 
+              {/* Straight after a session the hero speaks in the mode's own
+                  words — a consular officer is not "our AI recruiter". */}
               <ThemedText style={[styles.heroTitle, { color: colors.tint }]}>
                 {justFinished
-                  ? `Interview Session${'\n'}Complete!`
+                  ? copy.resultsHeroTitle
                   : session.session_title || 'Interview Session'}
               </ThemedText>
               <ThemedText style={[styles.heroSub, { color: colors.subtext }]}>
                 {justFinished
-                  ? "You've successfully finished your mock interview with our AI recruiter."
+                  ? copy.resultsHeroSubtitle
                   : session.job_description
                     ? [session.job_description.title, session.job_description.company_name]
                         .filter(Boolean)

@@ -21,7 +21,9 @@ export default function Signin() {
 
   useEffect(() => {
     if (!isInitializing && !isLoading && user) {
-      router.replace(user.profile_completed ? '/(tabs)/dashboard' : '/mode-select')
+      // Straight into the app — what you are preparing for and who questions
+      // you are filters on the practice screen, not a gate on the way in.
+      router.replace('/(tabs)/dashboard')
     }
   }, [isInitializing, isLoading, user])
 

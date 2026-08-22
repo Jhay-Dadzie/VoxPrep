@@ -4,11 +4,13 @@ import { router, useLocalSearchParams } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { ThemedText } from '@/components/themed-text'
 import { useColorScheme } from '@/hooks/use-color-scheme'
+import { useMode } from '@/hooks/mode-context'
 import { Colors } from '@/constants/theme'
 
 export default function Countdown() {
   const colorScheme = useColorScheme()
   const colors = Colors[colorScheme ?? 'light']
+  const { copy } = useMode()
   const { sessionId } = useLocalSearchParams<{ sessionId: string }>()
   const [count, setCount] = useState(3)
   const scale = useRef(new Animated.Value(1)).current
@@ -46,7 +48,9 @@ export default function Countdown() {
         </View>
 
         <ThemedText style={[styles.title, { color: colors.oppositeColor }]}>Get ready...</ThemedText>
-        <ThemedText style={[styles.sub, { color: colors.subtext }]}>Your interview is about to start.</ThemedText>
+        <ThemedText style={[styles.sub, { color: colors.subtext }]}>
+          Your {copy.sessionNoun} is about to start.
+        </ThemedText>
       </View>
     </SafeAreaView>
   )
