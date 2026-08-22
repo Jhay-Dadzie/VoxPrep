@@ -61,6 +61,14 @@ export default function HistoryDetailScreen() {
     try {
       const result = await historyService.getById(id)
       if (!isMountedRef.current) return
+
+      // Written exams are reviewed as marked papers — this screen renders
+      // per-answer AI feedback, which an exam does not have.
+      if (result.session_kind === 'exam') {
+        router.replace({ pathname: '/exam-results', params: { sessionId: result.id } })
+        return
+      }
+
       setSession(result)
       setNotes(result.notes ?? '')
     } catch (err) {
