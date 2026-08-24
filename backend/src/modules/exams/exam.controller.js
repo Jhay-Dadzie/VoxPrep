@@ -26,13 +26,13 @@ export const prepareExam = asyncHandler(async (req, res, next) => {
 
   if (req.file) {
     try {
-      jobContent = (await parseDocument(req.file.buffer, req.file.originalname))?.trim() || '';
+      jobContent = (await parseDocument(req.file.buffer, req.file.originalname, req.file.mimetype))?.trim() || '';
     } catch (parseError) {
       return next(new AppError(`Could not read that document: ${parseError.message}`, 400));
     }
 
     if (!jobContent) {
-      return next(new AppError('That document appears to be empty or contains no readable text. If it is a scanned image, paste the text instead.', 400));
+      return next(new AppError('That document appears to be empty or contains no readable text. A scanned image has no text to read — upload the original file instead of a photo of it.', 400));
     }
   }
 
@@ -41,7 +41,7 @@ export const prepareExam = asyncHandler(async (req, res, next) => {
   // thin material produces a short paper, which the generator reports honestly,
   // rather than no paper at all.
   if (jobContent.length < 50) {
-    return next(new AppError('Add more of your material before setting the exam — paste it or upload a document (at least 50 characters).', 400));
+    return next(new AppError('There is not enough material in that file to set an exam from (at least 50 characters of readable text).', 400));
   }
 
   let result;

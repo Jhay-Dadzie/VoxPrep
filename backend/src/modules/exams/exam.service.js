@@ -1,5 +1,7 @@
+import { randomUUID } from 'node:crypto';
 import { getSupabaseAdminClient } from '../../config/supabase.js';
 import { GEMINI_MODEL } from '../../config/gemini.js';
+import { runQuery } from '../../core/utils/supabaseQuery.js';
 import { createJobDescription } from '../jobDescription/jobDescription.service.js';
 import { generateExamQuestions } from '../ai/generators/exam.generator.js';
 import { isWrittenMode, resolvePaper } from '../interviews/modes.js';
@@ -135,41 +137,65 @@ export const prepareExam = async (
       mode: paperMode,
     });
 
-    const { data: created, error: sessionError } = await supabase
-      .from('interview_sessions')
-      .insert({
-        user_id: userId,
-        job_description_id: jobDescription.id,
-        session_title: sessionTitle || `${jobDescription.title} - Exam`,
-        session_kind: 'exam',
-        status: 'in_progress',
-        // The paper exists in full from this moment, so unlike an interview the
-        // count is known up front rather than settled at the end.
-        total_questions: questions.length,
-        questions_answered: 0,
-        started_at: new Date().toISOString(),
-      })
-      .select()
-      .single();
+    // Both writes below are retried if the connection drops, and both are made
+    // safe to retry first. It matters here more than anywhere else in the app:
+    // by this line the paper has already cost two minutes of generation, and
+    // the socket to Supabase has been sitting idle for all of it — long past
+    // the seconds a keep-alive connection is normally held open — so the first
+    // request after generation is the one most likely to meet a dead socket.
+    //
+    // The id is ours rather than the database's so that a replay is an insert
+    // of the same row rather than a second one; the delete before each replay
+    // clears whatever a half-finished attempt left behind.
+    const sessionId = randomUUID();
 
-    if (sessionError) throw new Error(sessionError.message);
-    session = created;
-
-    const { error: insertError } = await supabase.from('exam_questions').insert(
-      questions.map((question, index) => ({
-        session_id: session.id,
-        question_number: index + 1,
-        question_text: question.question_text,
-        options: question.options,
-        correct_option: question.correct_option,
-        explanation: question.explanation,
-        topic: question.topic,
-        difficulty_level: question.difficulty_level,
-        ai_model_used: GEMINI_MODEL,
-      }))
+    session = await runQuery(
+      'create the exam session',
+      () =>
+        supabase
+          .from('interview_sessions')
+          .insert({
+            id: sessionId,
+            user_id: userId,
+            job_description_id: jobDescription.id,
+            session_title: sessionTitle || `${jobDescription.title} - Exam`,
+            session_kind: 'exam',
+            status: 'in_progress',
+            // The paper exists in full from this moment, so unlike an interview
+            // the count is known up front rather than settled at the end.
+            total_questions: questions.length,
+            questions_answered: 0,
+            started_at: new Date().toISOString(),
+          })
+          .select()
+          .single(),
+      {
+        replaySafe: true,
+        before: () => supabase.from('interview_sessions').delete().eq('id', sessionId),
+      }
     );
 
-    if (insertError) throw new Error(insertError.message);
+    await runQuery(
+      'save the exam questions',
+      () =>
+        supabase.from('exam_questions').insert(
+          questions.map((question, index) => ({
+            session_id: session.id,
+            question_number: index + 1,
+            question_text: question.question_text,
+            options: question.options,
+            correct_option: question.correct_option,
+            explanation: question.explanation,
+            topic: question.topic,
+            difficulty_level: question.difficulty_level,
+            ai_model_used: GEMINI_MODEL,
+          }))
+        ),
+      {
+        replaySafe: true,
+        before: () => supabase.from('exam_questions').delete().eq('session_id', session.id),
+      }
+    );
 
     return {
       session,

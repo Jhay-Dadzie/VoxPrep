@@ -21,9 +21,60 @@ import { warn } from '../../../core/errors/logger.js';
  *    more often than chance, and a student who notices can pass without reading
  *    the questions. Options are shuffled and re-labelled here, so the position
  *    of the answer owes nothing to the model.
+ *
+ *  - **De-sourcing.** A model handed a document writes about the document —
+ *    "according to the text", "the described system". The student sits the
+ *    paper with nothing in front of them, so such a question is unanswerable as
+ *    well as a tell. The prompt forbids it; this is the net under that.
  */
 
 const VALID_DIFFICULTIES = new Set(['easy', 'medium', 'hard']);
+
+/**
+ * Lead-ins that can be lifted off the front of a sentence without changing what
+ * it asks. "According to the text, what does entropy measure?" is a fine
+ * question wearing a prefix, so it is repaired rather than discarded.
+ */
+const SOURCE_LEAD_IN =
+  /^\s*(?:according to|based (?:on|upon)|as per|as (?:stated|mentioned|described|defined|discussed|outlined|noted|explained|shown|presented|covered)(?:\s+(?:in|by))?|referring to|with reference to|drawing on|from|in|within)\s+(?:the|this|these|that|your|our)?\s*(?:above|given|provided|supplied|attached|uploaded|following|preceding|original)?\s*(?:source|course|study|lecture|reading)?\s*(?:materials?|documents?|texts?|passages?|excerpts?|extracts?|contents?|notes?|slides?|lectures?|readings?|articles?|handouts?|syllabus|chapters?|sections?|paragraphs?|books?|authors?|writers?)\b[^,.:;?!]{0,30}\s*[,:]\s*/i;
+
+/**
+ * References that cannot be lifted off, because they are load-bearing: strip
+ * "the mentioned" from "Which property does the mentioned protocol guarantee?"
+ * and nothing identifies the protocol. Those questions are dropped.
+ *
+ * Deliberately narrow. "the document" is a DOM object, "the given values" is
+ * how a worked problem is phrased, and "the extract" is chemistry — so bare
+ * nouns only make the list where no course would use them innocently, and
+ * everything else has to appear in a referential construction to count.
+ */
+const SOURCE_REFERENCES = [
+  /\b(?:according to|based (?:on|upon)|as per)\s+(?:the|this|these|that|your|our)?\s*(?:above|given|provided|supplied|attached|uploaded|original)?\s*(?:source\s+)?(?:materials?|documents?|texts?|passages?|excerpts?|extracts?|notes?|slides?|lectures?|readings?|articles?|handouts?|chapters?|sections?|authors?|books?)\b/i,
+  /\bsource material\b/i,
+  /\bthe (?:passage|excerpt|handout|syllabus|reading|transcript)\b/i,
+  /\bthe (?:text|material|content|notes|slides|lecture|article|author|book|chapter|section|paragraph|document|passage)\s+(?:above|below|states?|said|says?|writes?|wrote|argues?|notes?|mentions?|describes?|defines?|explains?|suggests?|indicates?|claims?|outlines?|lists?|presents?|discusses?|covers?|refers?)\b/i,
+  /\bas (?:stated|mentioned|described|defined|discussed|outlined|noted|explained|shown|presented|listed|covered|detailed|written)\s+(?:above|below|earlier|previously|before|in the|by the)\b/i,
+  /\bthe (?:aforementioned|above[- ]mentioned|aforesaid)\b/i,
+  /\bthe (?:mentioned|described|discussed|stated|outlined|referenced|uploaded|attached)\s+[a-z]/i,
+  /\b(?:in|from)\s+(?:the|this)\s+(?:document|passage|text|excerpt|extract|material|reading|article|lecture|notes|slides|handout)\b/i,
+  /\bas we (?:saw|discussed|covered|noted|learned)\b/i,
+];
+
+const referencesSource = (text) => SOURCE_REFERENCES.some((pattern) => pattern.test(text));
+
+/**
+ * Drop a removable source lead-in and re-capitalise what is left.
+ *
+ * Returns the input untouched when there is nothing to strip, or when stripping
+ * would leave a fragment too short to be a question on its own.
+ */
+export const stripSourceLeadIn = (text) => {
+  const trimmed = String(text || '').trim();
+  const stripped = trimmed.replace(SOURCE_LEAD_IN, '').trim();
+
+  if (stripped === trimmed || stripped.length < 12) return trimmed;
+  return stripped.charAt(0).toUpperCase() + stripped.slice(1);
+};
 
 /**
  * Questions per model call.
@@ -71,8 +122,13 @@ const shuffled = (items) => {
  * tests, and a silently altered question is worse than a shorter paper.
  */
 const normalizeQuestion = (raw, optionCount) => {
-  const questionText = String(raw?.question_text || '').trim();
+  const questionText = stripSourceLeadIn(raw?.question_text);
   if (!questionText) return null;
+
+  // A question the student cannot answer without the document in front of them
+  // is not a question. Dropped rather than rewritten: removing the reference
+  // would leave nothing identifying what is being asked about.
+  if (referencesSource(questionText)) return null;
 
   const options = Array.isArray(raw?.options) ? raw.options : [];
   const cleaned = options
@@ -83,6 +139,7 @@ const normalizeQuestion = (raw, optionCount) => {
     .filter((option) => option.text.length > 0);
 
   if (cleaned.length !== optionCount) return null;
+  if (cleaned.some((option) => referencesSource(option.text))) return null;
 
   const correct = String(raw?.correct_option || '').trim().toUpperCase();
   const answer = cleaned.find((option) => option.label === correct);
@@ -93,7 +150,10 @@ const normalizeQuestion = (raw, optionCount) => {
   const texts = new Set(cleaned.map((option) => normalizeKey(option.text)));
   if (texts.size !== cleaned.length) return null;
 
-  const explanation = String(raw?.explanation || '').trim();
+  // The explanation is only shown after marking, so a leak here costs less than
+  // one in the question — enough to strip a lead-in for, not enough to throw an
+  // otherwise sound question away over.
+  const explanation = stripSourceLeadIn(raw?.explanation);
   if (!explanation) return null;
 
   // Re-label in a fresh random order, so the answer's position comes from here
@@ -207,4 +267,4 @@ export const generateExamQuestions = async (
   return accepted;
 };
 
-export default { generateExamQuestions };
+export default { generateExamQuestions, stripSourceLeadIn };

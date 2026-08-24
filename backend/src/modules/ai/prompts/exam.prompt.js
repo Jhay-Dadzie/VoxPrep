@@ -11,6 +11,20 @@ import { resolveMode, resolvePaper } from '../../interviews/modes.js';
  * properties that make a paper markable at all — one defensible answer, three
  * distractors that are actually wrong, and no tell in how the options are
  * written.
+ *
+ * ── Two things the material must not do to the paper ────────────────────────
+ *
+ * **It must not show through.** A model handed a document writes about the
+ * document: "according to the text", "as described above", "the mentioned
+ * system". The student sits the paper with nothing in front of them, so every
+ * one of those is a question they cannot answer and a reminder that this is a
+ * generated quiz rather than an exam. The paper has to read as a paper.
+ *
+ * **It must not become the ceiling.** Asked for questions "from" a document, a
+ * model reliably returns its sentences with a word removed. That tests reading,
+ * not understanding. The material fixes the *syllabus* — which concepts are
+ * fair game — not the *form*: a concept it teaches may be examined in a
+ * scenario it never mentions, which is what an application question is.
  */
 
 const MAX_SOURCE_CHARS = 12000;
@@ -78,7 +92,8 @@ ${avoid.map((text) => `- ${text}`).join('\n')}
       content: [
         `You are ${mode.persona}.`,
         'You set papers that can be marked without argument: every question has exactly one defensible answer, and every wrong option is wrong for a reason a student could name.',
-        'You never test anything the source material does not cover, and you never write a question that would fit any other course.',
+        'You test the subject the material teaches — its concepts applied, not its sentences recited — and you never write a question that would fit any other course.',
+        'Your papers read as standalone exam papers. Nothing on them betrays that they were written from a particular document.',
       ].join(' '),
     },
     {
@@ -99,18 +114,30 @@ Key topics: ${topics}
 ${truncateSource(jobData.job_content)}
 --- END SOURCE MATERIAL ---
 ${avoidBlock}
-Rules:
-- Every question must be answerable from the source material alone. If answering needs outside knowledge, rewrite it.
+Scope — what may be asked:
+- Every question must be answerable by someone who has understood the material. Concepts, terms, principles and worked methods must all come from it.
+- Recall is not the only thing on offer. A question may take a concept the material teaches and apply it to a situation the material never spells out — a short scenario, a small worked case, a prediction of what happens, a comparison, or choosing the right approach for a case. That is preferred over reciting a definition.
+- At least a third of these questions must be application of that kind.
+- Never require a fact, figure, formula, name or convention the material never introduces. If answering needs outside knowledge, rewrite it.
+
+Anonymity — the paper must not reveal where it came from:
+- The student sits this paper with nothing in front of them. They cannot look anything up.
+- Never refer to the material or to the act of reading it. Banned in questions, options and explanations: "according to the document/text/passage/material/source/notes/slides/lecture/author", "as stated/mentioned/described/defined/discussed/outlined above", "in the passage", "the text says", "based on the material", "from the reading", "in this document", "the article", "the excerpt", "the given", "as we saw".
+- Ask directly about the subject instead. Not "According to the text, what does entropy measure?" but "What does entropy measure?".
+- Name real subject matter — a concept, a system, a process, a technique — never "the described system" or "the mentioned process". If a scenario needs context, write the context into the question itself.
+- Explanations follow the same rule: justify the answer from the subject, never from where it was written down.
+
+Form:
 - Exactly ${paper.optionCount} options per question, labelled ${labels.join(', ')}, and exactly one of them correct.
 - Spread the correct answer across the labels. Do not let one label carry most of them.
 - Options must be of similar length and grammatical form. Length, hedging or detail must never signal which one is right.
 - Never use "All of the above", "None of the above", "Both A and B", or any option that refers to another option.
 - Difficulty: ${easy} easy, ${medium} medium, ${hard} hard.
-- No two questions may test the same fact. If two are close, replace one.
+- No two questions may test the same point. If two are close, replace one.
 - Ask one thing per question. Do not bundle two asks behind one question mark.
 - Plain text only: no markdown, no numbering, no "Question 4:" prefix, no LaTeX.
-- explanation: one or two sentences saying why the correct option is correct, grounded in the material. Write it for a student who picked wrongly and wants to understand, not for a grader. Do not begin with "The correct answer is".
-- topic: two to four words naming the part of the material the question comes from.
+- explanation: one or two sentences saying why the correct option is correct, grounded in the subject itself. Write it for a student who picked wrongly and wants to understand, not for a grader. Do not begin with "The correct answer is".
+- topic: two to four words naming the area of the subject the question tests.
 
 ${mode.guidance.map((line) => `- ${line}`).join('\n')}
 
