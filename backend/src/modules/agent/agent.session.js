@@ -6,7 +6,14 @@ import {
 } from '../../config/deepgram-agent.js';
 import { info, warn, error as logError } from '../../core/errors/logger.js';
 import { addQuestionToSession, completeSession, submitAnswer } from '../interviews/interview.service.js';
-import { buildAgentSettings, buildClosingMessages, closingRemarkFor } from './agent.settings.js';
+import { speakerIndexForTurn } from '../interviews/panel.js';
+import {
+  buildAgentSettings,
+  buildClosingMessages,
+  buildSpeakerMessages,
+  closingRemarkFor,
+} from './agent.settings.js';
+import { buildAgentPrompt } from './agent.prompt.js';
 import { TranscriptPairer, classifyQuestion } from './agent.transcript.js';
 
 /**
@@ -30,6 +37,19 @@ import { TranscriptPairer, classifyQuestion } from './agent.transcript.js';
  *
  * Rows are written as the conversation happens, not at the end. A candidate who
  * loses signal at question nine keeps nine graded answers instead of none.
+ *
+ * ── Who is speaking ─────────────────────────────────────────────────────────
+ *
+ * A panel is several people and has to sound like several people, but the agent
+ * synthesises one voice at a time. So the panel runs as a rotation held here:
+ * between turns — never during one — the floor passes to the next panelist, and
+ * both halves of that have to move together. `UpdateSpeak` changes what the
+ * candidate hears; `UpdatePrompt` tells the model who it has become, without
+ * which the new voice picks up the previous panelist's thread.
+ *
+ * The handover point is `AgentAudioDone`: the interviewer has stopped talking
+ * and the candidate has not started, which is the one window in a turn where
+ * changing the configuration cannot clip anybody.
  */
 
 /** Frames the client sends us are raw PCM; anything text is a control message. */
@@ -42,7 +62,7 @@ export class AgentSession {
    * @param {string} deps.sessionId
    * @param {string} deps.userId
    * @param {object} deps.jobData - the session's job description row
-   * @param {object} [deps.options] - mode, voice, panelSize, maxQuestions, candidateName
+   * @param {object} [deps.options] - mode, panel, voice, maxQuestions, candidateName
    */
   constructor({ client, sessionId, userId, jobData, options = {} }) {
     this.client = client;
@@ -51,6 +71,19 @@ export class AgentSession {
     this.jobData = jobData;
     this.options = options;
     this.maxQuestions = options.maxQuestions || 15;
+
+    /** The seated panel, chair first. One entry for a one-on-one. */
+    this.panel = Array.isArray(options.panel) ? options.panel : [];
+    /** Which seat currently holds the floor. */
+    this.speakerIndex = 0;
+    /** Agent turns spoken so far; the rotation is a function of this. */
+    this.agentTurns = 0;
+    /**
+     * True while the current speaker's brief still tells them to introduce
+     * themselves. Cleared after their first turn, so a panelist who holds the
+     * floor for a second question does not say hello twice.
+     */
+    this.handoverPending = false;
 
     this.upstream = null;
     this.pairer = new TranscriptPairer();
@@ -105,8 +138,8 @@ export class AgentSession {
       JSON.stringify(
         buildAgentSettings(this.jobData, {
           mode: this.options.mode,
+          panel: this.panel,
           voice: this.options.voice,
-          panelSize: this.options.panelSize,
           maxQuestions: this.maxQuestions,
           candidateName: this.options.candidateName,
         })
@@ -157,6 +190,9 @@ export class AgentSession {
     switch (msg.type) {
       case 'SettingsApplied':
         this.sendEvent({ type: 'ready', maxQuestions: this.maxQuestions });
+        // The chair opens. Told to the phone as well as configured upstream, so
+        // the screen shows the face the candidate is about to hear.
+        this.announceSpeaker();
         break;
 
       case 'ConversationText':
@@ -181,6 +217,7 @@ export class AgentSession {
         // synthesised, and ending on it cut the sign-off off entirely — the
         // call simply stopped after a question nobody was going to answer.
         if (this.closing && this.closingSpoken) this.finish('closed');
+        else this.advanceSpeaker();
         break;
 
       case 'Error':
@@ -246,6 +283,74 @@ export class AgentSession {
       });
   }
 
+  // ── Who has the floor ─────────────────────────────────────────────────────
+
+  /**
+   * Called once the interviewer has finished speaking a turn.
+   *
+   * Two things can happen. The rotation moves on, and the next panelist is
+   * briefed and given a voice. Or it does not, and the outgoing brief — which
+   * told the current speaker to introduce themselves — is replaced with one that
+   * does not, so their second question is not a second hello.
+   */
+  advanceSpeaker() {
+    if (this.closing || this.finished || this.panel.length <= 1) return;
+
+    this.agentTurns += 1;
+    const next = speakerIndexForTurn(this.agentTurns, this.panel.length);
+
+    if (next !== this.speakerIndex) {
+      this.setSpeaker(next, true);
+      return;
+    }
+
+    if (this.handoverPending) this.setSpeaker(this.speakerIndex, false);
+  }
+
+  /**
+   * Hand the floor to a seat.
+   *
+   * @param {number} index
+   * @param {boolean} handover - whether the incoming speaker should announce
+   *   themselves; false when only the brief is being refreshed
+   */
+  setSpeaker(index, handover) {
+    const changed = index !== this.speakerIndex;
+    this.speakerIndex = index;
+    this.handoverPending = handover;
+
+    if (this.upstream?.readyState !== WebSocket.OPEN) return;
+
+    const prompt = buildAgentPrompt(this.jobData, {
+      maxQuestions: this.maxQuestions,
+      mode: this.options.mode,
+      panel: this.panel,
+      speakerIndex: index,
+      handover,
+      candidateName: this.options.candidateName,
+    });
+
+    for (const message of buildSpeakerMessages(this.panel, index, prompt)) {
+      this.upstream.send(JSON.stringify(message));
+    }
+
+    if (changed) this.announceSpeaker();
+  }
+
+  /** Tell the phone whose face and name to show. */
+  announceSpeaker() {
+    const speaker = this.panel[this.speakerIndex];
+    if (!speaker) return;
+
+    this.sendEvent({
+      type: 'speaker',
+      index: this.speakerIndex,
+      voice_id: speaker.voiceId,
+      name: speaker.name,
+      role: speaker.role,
+    });
+  }
+
   // ── Ending ────────────────────────────────────────────────────────────────
 
   /**
@@ -263,6 +368,20 @@ export class AgentSession {
     this.sendEvent({ type: 'closing', reason });
 
     if (this.upstream?.readyState === WebSocket.OPEN) {
+      // The chair closes an interview, whoever asked the last question. Only
+      // the voice is changed — the closing messages carry their own prompt.
+      const chair = this.panel[0];
+      if (chair && this.speakerIndex !== 0) {
+        this.speakerIndex = 0;
+        this.upstream.send(
+          JSON.stringify({
+            type: 'UpdateSpeak',
+            speak: { provider: { type: 'deepgram', model: chair.model } },
+          })
+        );
+        this.announceSpeaker();
+      }
+
       for (const message of buildClosingMessages(closingRemarkFor(reason))) {
         this.upstream.send(JSON.stringify(message));
       }

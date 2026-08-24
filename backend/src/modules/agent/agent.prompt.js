@@ -1,4 +1,4 @@
-import { resolveMode, resolvePanelSize } from '../interviews/modes.js';
+import { resolveMode } from '../interviews/modes.js';
 
 /**
  * The interviewer's standing instructions for a live voice conversation.
@@ -55,44 +55,82 @@ export const buildGreeting = (jobData, modeId) => {
   return `Thanks for making the time today. To start, tell me a bit about your background and what drew you to the ${role || 'role'}.`;
 };
 
+/** "Dr. Rose-Mary" → "Rose-Mary"; the form a colleague would actually say. */
+const TITLES = /^(dr|prof|professor|mr|mrs|ms|miss)\.?$/i;
+const firstName = (name = '') => {
+  const parts = String(name).split(' ').filter(Boolean);
+  return parts.find((part) => !TITLES.test(part)) || name;
+};
+
 /**
  * Who else is in the room.
  *
- * Only one voice ever speaks — swapping speakers mid-call would mean
- * reconfiguring the agent between turns — so a panel is carried in the prompt
- * instead: the speaker chairs it and questions on its behalf. That is close to
- * how a real panel sounds anyway, where the chair does most of the talking.
+ * A panel is several people, and it has to sound like several people. The agent
+ * speaks with one voice at a time, so the panel is run as a rotation: the server
+ * changes the speaking voice between turns (`UpdateSpeak`) and re-sends this
+ * brief with a new `speakerIndex`, so the model knows which panelist it is
+ * currently being.
+ *
+ * That is why the brief names everybody. The model is not chairing on the
+ * panel's behalf any more — it is one member of it at a time, and it needs to
+ * know which member, who the others are, and that it must not answer for them.
+ *
+ * @param {Array<{name: string, role: string}>} panel
+ * @param {number} speakerIndex - whose turn it is
+ * @param {boolean} handover - true when this speaker has just taken the floor
  */
-const buildPanelBrief = (panelSize) => {
-  if (panelSize <= 1) return '';
+const buildPanelBrief = (panel, speakerIndex, handover) => {
+  if (panel.length <= 1) return '';
+
+  const speaker = panel[speakerIndex] || panel[0];
+  const previous = panel[(speakerIndex - 1 + panel.length) % panel.length];
+  const roster = panel
+    .map((member, index) =>
+      `- ${member.name} — ${member.role}${index === speakerIndex ? ' (this is you, right now)' : ''}`
+    )
+    .join('\n');
 
   return `
 WHO IS IN THE ROOM
 
-You chair a panel of ${panelSize}, and you are the only one who speaks — your colleagues pass you their questions rather than asking them out loud.
+The candidate is facing a panel of ${panel.length}. You voice all of them, one at a time, and the candidate hears a different voice for each.
 
-- Ask on the panel's behalf, not only your own. Occasionally attribute a question to a colleague ("My colleague would want to know...") — sparingly, no more than every few turns.
-- Cover the angles a panel of ${panelSize} would between them, rather than following one line of enquiry the whole way.
-- Never invent a colleague's name, and never narrate the panel conferring.
+${roster}
+
+RIGHT NOW YOU ARE ${speaker.name.toUpperCase()}, ${speaker.role.toUpperCase()}.
+
+- Ask what ${speaker.name} would ask: the ${speaker.role} seat on this panel has its own angle. Take it, and leave the other angles to the colleagues who hold them.
+- Speak only for yourself. Never read out a colleague's question, never say "my colleague would like to know", and never narrate the panel conferring.
+- Do not announce that the panel is taking turns, and do not explain the format. The candidate can hear who is speaking.
+- Never invent a panelist who is not on the list above.${
+    handover
+      ? `\n- You have just taken over from ${previous.name}. Open with a short handover — a few words, naming yourself, such as "Thanks ${firstName(previous.name)}. ${firstName(speaker.name)} here." — and then ask your question in the same turn. Never hand over without asking something.`
+      : `\n- You already have the floor. Do not re-introduce yourself; just continue.`
+  }
 `;
 };
 
 /**
- * Build the system prompt handed to the agent at connect time.
+ * Build the system prompt handed to the agent.
+ *
+ * Sent once at connect time, and again — via `UpdatePrompt` — every time the
+ * floor passes to another panelist, which is the only way the model can learn
+ * that it is now someone else.
  *
  * @param {object} jobData - title, company_name, job_content, key_skills, ...
  * @param {object} [context]
  * @param {number} [context.maxQuestions] - ceiling the closing instruction refers to
  * @param {string} [context.mode] - practice mode id; shapes persona and coverage
- * @param {number} [context.panelSize] - how many people the candidate faces
+ * @param {Array<{name: string, role: string}>} [context.panel] - the seated panel
+ * @param {number} [context.speakerIndex] - which seat currently holds the floor
+ * @param {boolean} [context.handover] - true when the floor has just changed hands
  * @param {string} [context.candidateName]
  */
 export const buildAgentPrompt = (
   jobData,
-  { maxQuestions = 15, mode: modeId, panelSize, candidateName } = {}
+  { maxQuestions = 15, mode: modeId, panel = [], speakerIndex = 0, handover = false, candidateName } = {}
 ) => {
   const mode = resolveMode(modeId);
-  const panel = resolvePanelSize(modeId, panelSize);
   const skills = Array.isArray(jobData?.key_skills) && jobData.key_skills.length
     ? jobData.key_skills.join(', ')
     : 'not specified';
@@ -114,7 +152,7 @@ ${candidateName ? `Candidate: ${candidateName}` : ''}
 --- SOURCE MATERIAL ---
 ${truncate(jobData?.job_content)}
 --- END SOURCE MATERIAL ---
-${buildPanelBrief(panel)}
+${buildPanelBrief(panel, speakerIndex, handover)}
 HOW TO SPEAK
 
 You are being heard, not read. Everything you say is spoken aloud the instant you say it.

@@ -15,9 +15,14 @@ import { buildAgentPrompt, buildGreeting } from './agent.prompt.js';
  * The one configuration message that defines an interview.
  *
  * Sent immediately after the socket opens; Deepgram replies `SettingsApplied`
- * and then starts speaking the greeting. Nothing here can be changed afterwards
- * except the prompt, so anything that varies per interview — persona, source
- * material, voice — has to be decided before the socket is opened.
+ * and then starts speaking the greeting. Most of it is fixed for the life of the
+ * socket — audio formats, the listen and think providers — so anything that
+ * varies per interview has to be decided before the socket is opened.
+ *
+ * Two things can still be changed afterwards, and a panel interview depends on
+ * both: `UpdatePrompt` replaces the brief, and `UpdateSpeak` replaces the voice.
+ * Together they are how the floor passes from one panelist to the next without
+ * tearing down the conversation.
  */
 
 /**
@@ -36,14 +41,14 @@ export const resolveAgentVoice = (voice) => {
  * @param {object} jobData - the session's job description row
  * @param {object} [options]
  * @param {string} [options.mode] - practice mode id
- * @param {string} [options.voice] - panelist voice id
- * @param {number} [options.panelSize] - how many people the candidate faces
+ * @param {Array<{name, role, model}>} [options.panel] - the seated panel, chair first
+ * @param {string} [options.voice] - panelist voice id, when no panel was seated
  * @param {number} [options.maxQuestions]
  * @param {string} [options.candidateName]
  */
 export const buildAgentSettings = (
   jobData,
-  { mode, voice, panelSize, maxQuestions = 15, candidateName } = {}
+  { mode, panel = [], voice, maxQuestions = 15, candidateName } = {}
 ) => ({
   type: 'Settings',
   audio: {
@@ -57,12 +62,36 @@ export const buildAgentSettings = (
     listen: { provider: { type: 'deepgram', model: AGENT_LISTEN_MODEL } },
     think: {
       provider: { type: AGENT_THINK_PROVIDER, model: AGENT_THINK_MODEL },
-      prompt: buildAgentPrompt(jobData, { maxQuestions, mode, panelSize, candidateName }),
+      prompt: buildAgentPrompt(jobData, { maxQuestions, mode, panel, speakerIndex: 0, candidateName }),
     },
-    speak: { provider: { type: 'deepgram', model: resolveAgentVoice(voice) } },
+    // The chair opens, so the chair's voice is the one the session starts on.
+    // Everyone else arrives by UpdateSpeak — see buildSpeakerMessages.
+    speak: { provider: { type: 'deepgram', model: panel[0]?.model || resolveAgentVoice(voice) } },
     greeting: buildGreeting(jobData, mode),
   },
 });
+
+/**
+ * Pass the floor to another panelist, mid-session.
+ *
+ * Two messages, and both are needed. `UpdateSpeak` changes what the candidate
+ * hears; without `UpdatePrompt` the model does not know it has become someone
+ * else, and the new voice asks the previous panelist's follow-up. Sent together,
+ * between turns, so neither lands mid-sentence.
+ *
+ * @param {Array} panel
+ * @param {number} speakerIndex
+ * @param {string} prompt - the full brief, rebuilt for the incoming speaker
+ */
+export const buildSpeakerMessages = (panel, speakerIndex, prompt) => {
+  const speaker = panel[speakerIndex];
+  if (!speaker) return [];
+
+  return [
+    { type: 'UpdateSpeak', speak: { provider: { type: 'deepgram', model: speaker.model } } },
+    { type: 'UpdatePrompt', prompt },
+  ];
+};
 
 /**
  * How the interviewer signs off, per reason for ending.
@@ -121,4 +150,10 @@ export const buildClosingMessages = (closingRemark) => [
   },
 ];
 
-export default { buildAgentSettings, buildClosingMessages, closingRemarkFor, resolveAgentVoice };
+export default {
+  buildAgentSettings,
+  buildClosingMessages,
+  buildSpeakerMessages,
+  closingRemarkFor,
+  resolveAgentVoice,
+};

@@ -5,6 +5,7 @@ import { info, warn, error as logError } from '../../core/errors/logger.js';
 import { hasAgentCredentials } from '../../config/deepgram-agent.js';
 import { MAX_SESSION_QUESTIONS, loadSessionContext } from '../interviews/interview.service.js';
 import { resolvePanelSize } from '../interviews/modes.js';
+import { resolvePanel } from '../interviews/panel.js';
 import { AgentSession } from './agent.session.js';
 
 /**
@@ -142,7 +143,15 @@ const onConnection = (socket) => {
       MAX_SESSION_QUESTIONS
     );
 
-    info(`Voice interview opening for session ${msg.session_id} (max ${maxQuestions} questions)`);
+    // Clamped against the mode: a visa interview is one officer at one window
+    // whatever roster the client sends.
+    const panelSize = resolvePanelSize(msg.mode, msg.panel_size ?? msg.panel?.length);
+    const panel = resolvePanel(msg.panel, { size: panelSize, voice: msg.voice });
+
+    info(
+      `Voice interview opening for session ${msg.session_id} ` +
+      `(max ${maxQuestions} questions, ${panel.length} on the panel)`
+    );
 
     new AgentSession({
       client: socket,
@@ -152,9 +161,7 @@ const onConnection = (socket) => {
       options: {
         mode: msg.mode,
         voice: msg.voice,
-        // Clamped against the mode: a visa interview is one officer whatever
-        // the client asks for.
-        panelSize: resolvePanelSize(msg.mode, msg.panel_size),
+        panel,
         maxQuestions,
         candidateName: msg.candidate_name,
       },
