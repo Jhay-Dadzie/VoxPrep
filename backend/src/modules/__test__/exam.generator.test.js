@@ -151,6 +151,59 @@ describe('generateExamQuestions', () => {
     expect(question.difficulty_level).toBe('medium');
   });
 
+  it('lifts a source lead-in off a question that is otherwise fine', async () => {
+    respondOnce([
+      mcq({ question_text: 'According to the document, what does the first law state?' }),
+    ]);
+
+    const [question] = await generateExamQuestions(MATERIAL, { questionCount: 1 });
+
+    expect(question.question_text).toBe('What does the first law state?');
+  });
+
+  it('lifts one off an explanation too, since it is shown after marking', async () => {
+    respondOnce([
+      mcq({ explanation: 'As stated in the text, the first law conserves energy.' }),
+    ]);
+
+    const [question] = await generateExamQuestions(MATERIAL, { questionCount: 1 });
+
+    expect(question.explanation).toBe('The first law conserves energy.');
+  });
+
+  it('drops a question whose reference cannot be lifted off', async () => {
+    // Strip "the mentioned" and nothing identifies which process is meant, so
+    // there is no repair that leaves the question asking what it asked.
+    respondOnce([mcq({ question_text: 'Is the mentioned process reversible?' })]);
+
+    await expect(generateExamQuestions(MATERIAL, { questionCount: 10 })).rejects.toThrow(
+      /Could not write enough exam questions/i
+    );
+  });
+
+  it('drops a question whose options give away where the paper came from', async () => {
+    respondOnce([
+      mcq({ options: options('As described above', 'Entropy falls', 'Heat is work', 'Mass is energy') }),
+    ]);
+
+    await expect(generateExamQuestions(MATERIAL, { questionCount: 10 })).rejects.toThrow(
+      /Could not write enough exam questions/i
+    );
+  });
+
+  it('leaves subject matter that merely reads like a source reference alone', async () => {
+    // "the given values" is how a worked problem is phrased, and "the document
+    // object" is the DOM — neither says anything about where the paper came from.
+    respondOnce([
+      mcq({ question_text: 'Using the given values, what is the enthalpy change?' }),
+      mcq({ question_text: 'What does the document object represent in a browser?' }),
+    ]);
+
+    const questions = await generateExamQuestions(MATERIAL, { questionCount: 2 });
+
+    expect(questions).toHaveLength(2);
+  });
+
   it('never returns more than the requested count', async () => {
     respondOnce(
       Array.from({ length: 12 }, (_, index) => mcq({ question_text: `Question ${index}` }))
