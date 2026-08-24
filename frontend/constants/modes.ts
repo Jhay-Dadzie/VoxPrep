@@ -306,9 +306,10 @@ export const MODES: Record<ModeId, Mode> = {
     icon: 'school-outline',
     format: 'written',
     source: {
+      // No placeholder text to write: an exam is set from an uploaded file, so
+      // the textarea this would fill is not shown for this mode at all.
       label: 'Syllabus or Notes',
-      placeholder:
-        'Paste your syllabus, lecture notes, or the textbook chapter you are being examined on...',
+      placeholder: 'Upload your syllabus, lecture notes, slides or textbook chapter...',
       minLength: 120,
     },
     secondarySource: null,
@@ -332,7 +333,7 @@ export const MODES: Record<ModeId, Mode> = {
       recentSessionsLabel: 'Recent Exams',
       sessionsCompletedLabel: 'Exams Completed',
       setupTitle: 'What are you being examined on?',
-      setupSubtitle: 'Your paper is set strictly from this material.',
+      setupSubtitle: 'Upload your syllabus, lecture notes, slides or the chapter you are being examined on. Your paper is set strictly from that file.',
       setupInfoNote: 'AI will set 30 multiple-choice questions on the concepts, definitions and examples in it.',
       setupPromoTitle: 'Ready to ace your next exam?',
       setupPromoBody: 'Sit a full paper on your own notes and see exactly where you stand.',
@@ -348,7 +349,7 @@ export const MODES: Record<ModeId, Mode> = {
       sessionNoun: 'exam',
       sessionNounPlural: 'exams',
       proTip:
-        'Paste the exact material you are being examined on. Every question is set from it, so the closer it is to your syllabus, the more your score means.',
+        'Upload the exact material you are being examined on. Every question is set from it, so the closer it is to your syllabus, the more your score means.',
       sampleInsight:
         'You score well on definitions but lose marks where two concepts have to be told apart. Those are worth a second pass.',
     },

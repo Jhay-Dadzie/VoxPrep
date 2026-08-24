@@ -64,6 +64,8 @@ const CAN_BARGE_IN = Platform.OS === 'ios'
 
 export type AgentEvent =
   | { type: 'ready'; maxQuestions: number }
+  /** The floor has passed to this panelist; their voice speaks from here. */
+  | { type: 'speaker'; index: number; voice_id: string; name: string; role: string }
   | { type: 'transcript'; role: 'assistant' | 'user'; content: string }
   | { type: 'user_speaking' }
   | { type: 'agent_done' }
@@ -72,11 +74,22 @@ export type AgentEvent =
   | { type: 'done'; reason: string; asked: number }
   | { type: 'error'; message: string }
 
+/** One seat, as the server needs it: who they are and what they sound like. */
+export type AgentPanelMember = { voiceId: string; name: string; role: string }
+
 export type AgentConnectionOptions = {
   sessionId: string
   mode?: ModeId
   voice?: string
-  /** How many people the candidate is facing; the voice above chairs them. */
+  /**
+   * The panel, chair first.
+   *
+   * Every seat gets its own voice, and the server rotates between them, so a
+   * panel of three sounds like three people rather than one doing all the
+   * talking. Sent whole because the names are spoken during handovers.
+   */
+  panel?: AgentPanelMember[]
+  /** How many people the candidate is facing. Derived from `panel` when absent. */
   panelSize?: number
   maxQuestions?: number
   onEvent: (event: AgentEvent) => void
@@ -264,7 +277,8 @@ export class VoiceAgentConnection {
           session_id: this.options.sessionId,
           mode: this.options.mode,
           voice: this.options.voice,
-          panel_size: this.options.panelSize,
+          panel: this.options.panel,
+          panel_size: this.options.panelSize ?? this.options.panel?.length,
           max_questions: this.options.maxQuestions,
         })
         this.serverStarted = true

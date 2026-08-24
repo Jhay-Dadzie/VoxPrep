@@ -67,9 +67,13 @@ const TITLES = /^(dr|prof|professor|mr|mrs|ms|miss)\.?$/i
  * Naively taking the first word would render "Dr." for a titled panelist, so
  * titles are skipped. Hyphenated names stay intact.
  */
+export function shortNameOf(name: string): string {
+  const parts = name.split(' ').filter(Boolean)
+  return parts.find((part) => !TITLES.test(part)) ?? name
+}
+
 export function shortName(panelist: Panelist): string {
-  const parts = panelist.name.split(' ').filter(Boolean)
-  return parts.find((part) => !TITLES.test(part)) ?? panelist.name
+  return shortNameOf(panelist.name)
 }
 
 export type Interviewer = {

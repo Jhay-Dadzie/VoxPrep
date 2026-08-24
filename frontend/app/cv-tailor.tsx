@@ -8,6 +8,11 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import { ThemedText } from '@/components/themed-text'
 import { useColorScheme } from '@/hooks/use-color-scheme'
 import { Colors } from '@/constants/theme'
+import {
+  ACCEPTED_DOCUMENT_LABEL,
+  ACCEPTED_DOCUMENT_TYPES,
+  MAX_UPLOAD_MB,
+} from '@/constants/uploads'
 import { cvService } from '@/services/cv'
 import { downloadTailoredCv, shareTailoredCv, type CvDownloadResult } from '@/lib/cv-pdf'
 import type { TailoredCv } from '@/types/cv'
@@ -32,13 +37,6 @@ type Step =
   | 'upload'
   | 'working'
   | 'ready'
-
-/** Mirrors the fileFilter on the backend's upload middleware. */
-const ACCEPTED_TYPES = [
-  'application/pdf',
-  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-  'text/plain',
-]
 
 const formatSize = (bytes?: number) => {
   if (!bytes) return ''
@@ -125,7 +123,7 @@ export default function CvTailor() {
     let picked: PickedDocument
     try {
       const picker = await DocumentPicker.getDocumentAsync({
-        type: ACCEPTED_TYPES,
+        type: ACCEPTED_DOCUMENT_TYPES,
         copyToCacheDirectory: true,
       })
       if (picker.canceled || !picker.assets?.length) return
@@ -303,7 +301,7 @@ function OfferStep({
             <ThemedText style={[styles.cardBody, { color: colors.subtext }]}>
               {working
                 ? 'Reading your CV and rewriting it against the job description. This takes up to a minute.'
-                : 'PDF, DOCX or TXT, up to 5 MB. A text-based file — a scan or photo has no text to read.'}
+                : `${ACCEPTED_DOCUMENT_LABEL}, up to ${MAX_UPLOAD_MB} MB. A text-based file — a scan or photo has no text to read.`}
             </ThemedText>
 
             <Pressable

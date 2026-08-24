@@ -12,6 +12,7 @@ import { useInterviewer } from '@/hooks/interviewer-context'
 import { useAuth } from '@/hooks/auth-context'
 import { Colors } from '@/constants/theme'
 import { MODES, MODE_LIST, clampPanelSize, type ModeId } from '@/constants/modes'
+import { ACCEPTED_DOCUMENT_LABEL, ACCEPTED_DOCUMENT_TYPES } from '@/constants/uploads'
 import {
   PANEL_SIZES,
   avatarSource,
@@ -29,13 +30,6 @@ import { setPreparedSession } from '@/lib/prepared-session'
 import type { PickedDocument } from '@/types/interview'
 
 const MAX_CHARS = 5000
-
-/** Mirrors the fileFilter on the backend's upload middleware. */
-const ACCEPTED_TYPES = [
-  'application/pdf',
-  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-  'text/plain',
-]
 
 const formatSize = (bytes?: number) => {
   if (!bytes) return ''
@@ -79,8 +73,15 @@ export default function Practice() {
   // would otherwise show people who are not going to be there, is hidden.
   const picksInterviewer = mode.interviewerChoice.enabled
   const isExam = mode.format === 'written'
+  // An exam is set strictly from the material, and typing it out by hand is
+  // both the slowest way to supply a syllabus and the one that loses the most
+  // of it — the tables, the diagrams' captions, the chapter headings a paper
+  // needs to spread its questions across. So a written paper takes a file and
+  // only a file, and the tab bar is not shown for a choice that has one option.
+  const uploadOnly = isExam
+  const activeTab = uploadOnly ? 'upload' : tab
   const hasEnoughText = text.trim().length >= source.minLength
-  const canGenerate = !isGenerating && (tab === 'paste' ? hasEnoughText : !!document)
+  const canGenerate = !isGenerating && (activeTab === 'paste' ? hasEnoughText : !!document)
 
   // The panel filter is constrained by the mode, and both are restored from
   // storage independently — so a stored pair can arrive out of step (a panel of
@@ -145,7 +146,7 @@ export default function Practice() {
     setError(null)
     try {
       const result = await DocumentPicker.getDocumentAsync({
-        type: ACCEPTED_TYPES,
+        type: ACCEPTED_DOCUMENT_TYPES,
         copyToCacheDirectory: true,
       })
       if (result.canceled || !result.assets?.length) return
@@ -193,7 +194,7 @@ export default function Practice() {
     setIsGenerating(true)
     setError(null)
 
-    const material = tab === 'paste' ? { jobContent: text } : { document: document! }
+    const material = activeTab === 'paste' ? { jobContent: text } : { document: document! }
 
     try {
       if (isExam) {
@@ -386,24 +387,26 @@ export default function Practice() {
             {copy.setupSubtitle}
           </ThemedText>
 
-          <View style={[styles.tabs, { borderBottomColor: colors.border }]}>
-            <Pressable
-              style={[styles.tab, { borderBottomColor: tab === 'paste' ? colors.tint : 'transparent' }]}
-              onPress={() => setTab('paste')}
-            >
-              <Ionicons name="clipboard-outline" size={16} color={tab === 'paste' ? colors.tint : colors.subtext} />
-              <ThemedText style={{ color: tab === 'paste' ? colors.tint : colors.subtext, fontWeight: '600' }}>Paste Text</ThemedText>
-            </Pressable>
-            <Pressable
-              style={[styles.tab, { borderBottomColor: tab === 'upload' ? colors.tint : 'transparent' }]}
-              onPress={() => setTab('upload')}
-            >
-              <Ionicons name="cloud-upload-outline" size={16} color={tab === 'upload' ? colors.tint : colors.subtext} />
-              <ThemedText style={{ color: tab === 'upload' ? colors.tint : colors.subtext, fontWeight: '600' }}>Upload File</ThemedText>
-            </Pressable>
-          </View>
+          {uploadOnly ? null : (
+            <View style={[styles.tabs, { borderBottomColor: colors.border }]}>
+              <Pressable
+                style={[styles.tab, { borderBottomColor: activeTab === 'paste' ? colors.tint : 'transparent' }]}
+                onPress={() => setTab('paste')}
+              >
+                <Ionicons name="clipboard-outline" size={16} color={activeTab === 'paste' ? colors.tint : colors.subtext} />
+                <ThemedText style={{ color: activeTab === 'paste' ? colors.tint : colors.subtext, fontWeight: '600' }}>Paste Text</ThemedText>
+              </Pressable>
+              <Pressable
+                style={[styles.tab, { borderBottomColor: activeTab === 'upload' ? colors.tint : 'transparent' }]}
+                onPress={() => setTab('upload')}
+              >
+                <Ionicons name="cloud-upload-outline" size={16} color={activeTab === 'upload' ? colors.tint : colors.subtext} />
+                <ThemedText style={{ color: activeTab === 'upload' ? colors.tint : colors.subtext, fontWeight: '600' }}>Upload File</ThemedText>
+              </Pressable>
+            </View>
+          )}
 
-          {tab === 'paste' ? (
+          {activeTab === 'paste' ? (
             <View style={[styles.textareaWrap, { backgroundColor: colors.inputBg }]}>
               <TextInput
                 multiline
@@ -446,8 +449,13 @@ export default function Practice() {
                 </>
               ) : (
                 <>
-                  <ThemedText style={{ color: colors.oppositeColor, fontWeight: '600', marginTop: 6 }}>Upload PDF, DOCX or TXT</ThemedText>
+                  <ThemedText style={{ color: colors.oppositeColor, fontWeight: '600', marginTop: 6 }}>
+                    {uploadOnly ? 'Upload your material' : 'Upload a document'}
+                  </ThemedText>
                   <ThemedText style={{ color: colors.muted, fontSize: 13 }}>Tap to choose a file from your device</ThemedText>
+                  <ThemedText style={{ color: colors.muted, fontSize: 12, textAlign: 'center', marginTop: 4 }}>
+                    {ACCEPTED_DOCUMENT_LABEL}
+                  </ThemedText>
                 </>
               )}
             </Pressable>

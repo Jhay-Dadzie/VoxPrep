@@ -9,7 +9,7 @@ import { VoiceWave } from '@/components/voice-wave'
 import { useColorScheme } from '@/hooks/use-color-scheme'
 import { useMode } from '@/hooks/mode-context'
 import { useInterviewer } from '@/hooks/interviewer-context'
-import { avatarSource, shortName } from '@/constants/interviewers'
+import { avatarSource, shortName, shortNameOf } from '@/constants/interviewers'
 import { Colors } from '@/constants/theme'
 import { useAgentSession } from '@/hooks/use-agent-session'
 import { clearPreparedSession, getPreparedSession } from '@/lib/prepared-session'
@@ -60,18 +60,21 @@ function RunningSession({
   offersCvTailoring: boolean
   interviewer: ReturnType<typeof useInterviewer>['interviewer']
 }) {
-  // One voice holds the call. A panel that swapped speakers mid-conversation
-  // would mean reconfiguring the agent between turns, which is the round trip
-  // this whole architecture exists to avoid — so the chair speaks throughout,
-  // and the panel's size is sent along so they can question on its behalf.
-  const panelist = interviewer.members[0]
+  // The whole roster goes up, not just the chair: the server gives each seat
+  // its own voice and passes the floor between them, so a panel of three is
+  // heard as three people. The chair still opens and closes.
+  const panel = React.useMemo(
+    () => interviewer.members.map(({ voiceId, name, role }) => ({ voiceId, name, role })),
+    [interviewer]
+  )
 
   const prepared = getPreparedSession(sessionId)
 
   const session = useAgentSession({
     sessionId,
     mode: modeId,
-    voice: panelist?.voiceId,
+    voice: interviewer.members[0]?.voiceId,
+    panel,
     panelSize: interviewer.size,
     maxQuestions: prepared?.maxQuestions,
     // For a job interview the CV step sits between the session and its
@@ -93,6 +96,10 @@ function RunningSession({
   const mm = Math.floor(session.elapsedSeconds / 60)
   const ss = session.elapsedSeconds % 60
   const position = Math.max(1, session.askedCount)
+
+  // Whoever currently holds the floor, so the face and the name on screen match
+  // the voice coming out of the speaker.
+  const panelist = interviewer.members[session.speakerIndex] ?? interviewer.members[0]
   const speakerName = panelist ? shortName(panelist) : 'The interviewer'
 
   const statusLabel =
@@ -179,6 +186,12 @@ function RunningSession({
 
           <ThemedText style={[styles.aiLabel, { color: colors.oppositeColor }]}>{statusLabel}</ThemedText>
 
+          {/* Which seat is asking. Only meaningful on a panel, where the voice
+              and the face change between turns. */}
+          {interviewer.isPanel && panelist ? (
+            <ThemedText style={[styles.seatLabel, { color: colors.subtext }]}>{panelist.role}</ThemedText>
+          ) : null}
+
           {/* The wave tracks real microphone level, so it only moves when the
               mic is actually live — a wave that animated regardless would say
               "you are being heard" at the exact moment that might be false. */}
@@ -218,8 +231,14 @@ function RunningSession({
 
             {session.transcript.map((line, index) => (
               <View key={`${index}-${line.role}`} style={styles.turn}>
+                {/* Attributed to whoever actually said it, not to whoever is
+                    speaking now — on a panel those differ. */}
                 <ThemedText style={[styles.turnWho, { color: line.role === 'user' ? colors.tint : colors.subtext }]}>
-                  {line.role === 'user' ? 'You' : speakerName}
+                  {line.role === 'user'
+                    ? 'You'
+                    : line.speaker
+                      ? shortNameOf(line.speaker)
+                      : speakerName}
                 </ThemedText>
                 <ThemedText style={[styles.turnText, { color: colors.oppositeColor }]}>
                   {line.content}
@@ -291,6 +310,7 @@ const styles = StyleSheet.create({
     width: 18, height: 18, borderRadius: 9, borderWidth: 3,
   },
   aiLabel: { fontWeight: '600', fontSize: 14, marginBottom: 10, textAlign: 'center' },
+  seatLabel: { fontSize: 12, marginTop: -6, marginBottom: 10, textAlign: 'center', letterSpacing: 0.3 },
 
   errorBox: { flexDirection: 'row', alignItems: 'center', gap: 8, padding: 12, borderRadius: 10, marginBottom: 14 },
 

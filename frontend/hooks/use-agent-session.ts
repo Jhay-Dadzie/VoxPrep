@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { interviewService } from '@/services/interview'
-import { VoiceAgentConnection, type AgentEvent } from '@/services/voice-agent'
+import { VoiceAgentConnection, type AgentEvent, type AgentPanelMember } from '@/services/voice-agent'
 import type { ModeId } from '@/constants/modes'
 
 /**
@@ -32,7 +32,12 @@ export type AgentPhase =
 
 const BAR_COUNT = 28
 
-export type TranscriptLine = { role: 'assistant' | 'user'; content: string }
+export type TranscriptLine = {
+  role: 'assistant' | 'user'
+  content: string
+  /** Which panelist said it. Absent on a one-on-one and on the candidate's turns. */
+  speaker?: string
+}
 
 /** How many lines of the conversation to keep on screen. */
 const VISIBLE_LINES = 8
@@ -41,7 +46,9 @@ type Options = {
   sessionId: string
   mode?: ModeId
   voice?: string
-  /** How many people the candidate is facing; the speaker chairs them. */
+  /** The panel, chair first. Each seat speaks in its own voice. */
+  panel?: AgentPanelMember[]
+  /** How many people the candidate is facing. Derived from `panel` when absent. */
   panelSize?: number
   maxQuestions?: number
   onFinished: () => void
@@ -51,6 +58,7 @@ export function useAgentSession({
   sessionId,
   mode,
   voice,
+  panel,
   panelSize,
   maxQuestions,
   onFinished,
@@ -63,6 +71,18 @@ export function useAgentSession({
   const [elapsedSeconds, setElapsedSeconds] = useState(0)
   const [levels, setLevels] = useState<number[]>(Array(BAR_COUNT).fill(0))
   const [agentSpeaking, setAgentSpeaking] = useState(false)
+  /** Which seat holds the floor. The server decides; this only follows along. */
+  const [speakerIndex, setSpeakerIndex] = useState(0)
+
+  /**
+   * The current speaker's name, read inside the event handler.
+   *
+   * A ref rather than the state above because transcript lines are tagged at
+   * the moment they arrive: reading state there would close over whoever was
+   * speaking when the handler was created, which on a panel is the wrong person
+   * from the second handover onwards.
+   */
+  const speakerName = useRef<string | undefined>(undefined)
 
   const connection = useRef<VoiceAgentConnection | null>(null)
   const mounted = useRef(true)
@@ -118,19 +138,28 @@ export function useAgentSession({
           setPhase('speaking')
           break
 
-        case 'transcript':
+        case 'speaker':
+          setSpeakerIndex(event.index)
+          speakerName.current = event.name
+          break
+
+        case 'transcript': {
           // Consecutive lines from the same speaker are one turn: the agent
           // emits a message per utterance, so an unmerged list reads as the
           // interviewer interrupting itself.
+          const who = event.role === 'assistant' ? speakerName.current : undefined
           setTranscript((prev) => {
             const last = prev[prev.length - 1]
             const merged =
-              last?.role === event.role
-                ? [...prev.slice(0, -1), { role: event.role, content: `${last.content} ${event.content}` }]
-                : [...prev, { role: event.role, content: event.content }]
+              // The floor only changes between turns, so two assistant lines
+              // from different panelists are two turns, not one to merge.
+              last?.role === event.role && last?.speaker === who
+                ? [...prev.slice(0, -1), { role: event.role, content: `${last.content} ${event.content}`, speaker: who }]
+                : [...prev, { role: event.role, content: event.content, speaker: who }]
             return merged.slice(-VISIBLE_LINES)
           })
           break
+        }
 
         case 'user_speaking':
           setPhase('listening')
@@ -172,6 +201,7 @@ export function useAgentSession({
       sessionId,
       mode,
       voice,
+      panel,
       panelSize,
       maxQuestions,
       onEvent,
@@ -208,6 +238,11 @@ export function useAgentSession({
       agent.stop()
       connection.current = null
     }
+    // `panel` is deliberately not a dependency. It is a fresh array on every
+    // render, and a changed dependency runs the cleanup — which would hang up a
+    // live interview. The roster is fixed for the session anyway: it is read
+    // once, when the socket opens.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId, mode, voice, panelSize, maxQuestions, onEvent])
 
   // ── Controls ───────────────────────────────────────────────────────────────
@@ -242,6 +277,8 @@ export function useAgentSession({
     liveAnswer: transcript[transcript.length - 1]?.role === 'user'
       ? transcript[transcript.length - 1].content
       : null,
+    /** Which seat is asking. Always 0 on a one-on-one. */
+    speakerIndex,
     askedCount,
     maxQuestions: questionCap,
     elapsedSeconds,
