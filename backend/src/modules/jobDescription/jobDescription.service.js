@@ -1,11 +1,15 @@
+import { randomUUID } from 'node:crypto';
+
 // Import Supabase admin client factory
 import { getSupabaseAdminClient } from '../../config/supabase.js';
+import { runQuery } from '../../core/utils/supabaseQuery.js';
 
 // Import helper functions used to analyze job descriptions
 import {
   extractSkills,
   detectExperienceLevel,
   detectIndustry,
+  sanitizeText,
 } from '../../core/utils/helpers.js';
 
 // Cached Supabase instance
@@ -34,13 +38,18 @@ const getSupabase = () => {
  */
 export const createJobDescription = async (jobData) => {
   const {
-    title,
-    company_name,
-    job_content,
     required_experience_level,
     industry,
     user_id,
   } = jobData;
+
+  // Pasted text arrives from the same documents uploads do — someone copying out
+  // of a PDF viewer brings the same unstorable control codes with them — so the
+  // scrub happens here as well as in the parser, at the last point before the row
+  // is written.
+  const title = sanitizeText(jobData.title);
+  const company_name = sanitizeText(jobData.company_name);
+  const job_content = sanitizeText(jobData.job_content);
 
   const supabase = getSupabase();
 
@@ -52,23 +61,36 @@ export const createJobDescription = async (jobData) => {
     industry || detectIndustry(job_content);
 
   // Insert new job description
-  const { data, error } = await supabase
-    .from('job_descriptions')
-    .insert({
-      user_id,
-      title,
-      company_name,
-      job_content,
-      key_skills: skills,
-      required_experience_level: expLevel,
-      industry: detectedIndustry,
-    })
-    .select()
-    .single();
+  //
+  // The id is generated here rather than by the database so the insert can be
+  // repeated after a dropped connection without writing the row twice — see
+  // runQuery. This is the first Supabase call of a request that may then spend
+  // two minutes generating an exam, so losing it is expensive in a way the
+  // reads elsewhere in this file are not.
+  const id = randomUUID();
 
-  if (error) throw new Error(error.message);
-
-  return data;
+  return runQuery(
+    'save the source material',
+    () =>
+      supabase
+        .from('job_descriptions')
+        .insert({
+          id,
+          user_id,
+          title,
+          company_name,
+          job_content,
+          key_skills: skills,
+          required_experience_level: expLevel,
+          industry: detectedIndustry,
+        })
+        .select()
+        .single(),
+    {
+      replaySafe: true,
+      before: () => supabase.from('job_descriptions').delete().eq('id', id),
+    }
+  );
 };
 
 /**
@@ -162,12 +184,15 @@ export const updateJobDescription = async (
   updateData
 ) => {
   const {
-    title,
-    company_name,
-    job_content,
     required_experience_level,
     industry,
   } = updateData;
+
+  // Same reason as createJobDescription: an edit can reintroduce what the insert
+  // was careful to strip.
+  const title = sanitizeText(updateData.title);
+  const company_name = sanitizeText(updateData.company_name);
+  const job_content = sanitizeText(updateData.job_content);
 
   // Always update timestamp
   const updatePayload = {

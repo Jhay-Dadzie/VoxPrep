@@ -18,7 +18,7 @@ export const createJobDescription = asyncHandler(async (req, res, next) => {
   if (req.file) {
     try {
       const { parseDocument } = await import('../uploads/parser.service.js');
-      jobContent = await parseDocument(req.file.buffer, req.file.originalname);
+      jobContent = await parseDocument(req.file.buffer, req.file.originalname, req.file.mimetype);
       value.job_content = jobContent; // Update with parsed content
     } catch (parseError) {
       return next(new AppError(`Document parsing failed: ${parseError.message}`, 400));
