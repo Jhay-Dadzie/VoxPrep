@@ -210,7 +210,7 @@ export const prepareSession = asyncHandler(async (req, res, next) => {
 
   if (req.file) {
     try {
-      jobContent = (await parseDocument(req.file.buffer, req.file.originalname))?.trim() || '';
+      jobContent = (await parseDocument(req.file.buffer, req.file.originalname, req.file.mimetype))?.trim() || '';
     } catch (parseError) {
       return next(new AppError(`Could not read that document: ${parseError.message}`, 400));
     }

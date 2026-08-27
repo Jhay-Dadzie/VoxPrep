@@ -19,9 +19,20 @@
  * only resolved when the request is made, a dead model fails silently at
  * runtime rather than at boot. The defaults here are ones verified against a
  * live key; change them only with the same verification.
+ *
+ * Two ids that look safe and are not, both found here by that verification:
+ *
+ *   `gemini-flash-latest` and the other `-latest` aliases point at whichever
+ *   preview is newest, which is also whichever is most oversubscribed. It
+ *   answered 503 "experiencing high demand" on every attempt across an hour.
+ *   An alias is the worst thing to end a chain with: it is the error the user
+ *   finally sees, and it hides whatever the real failure upstream of it was.
+ *
+ *   `-preview` suffixes are part of the id, not decoration. `gemini-3.1-flash-tts`
+ *   does not exist; `gemini-3.1-flash-tts-preview` does.
  */
 
-export const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-3.5-flash";
+export const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-3.6-flash";
 
 /**
  * Split a comma-separated env override into a model list.
@@ -39,21 +50,22 @@ const modelList = (value, fallback) =>
  * consistency in phrasing and saves the session, which is the right trade
  * mid-conversation.
  *
- * The two chains point at each other deliberately: whichever model is busy,
- * the other is idle.
+ * The chains point at each other deliberately: whichever model is busy, the
+ * others are idle. Every id below is one of the three verified to answer on a
+ * live key, ordered so no two chains lead with the same one.
  */
 export const GEMINI_MODEL_FALLBACKS = modelList(
   process.env.GEMINI_MODEL_FALLBACKS,
-  ["gemini-2.5-flash", "gemini-flash-latest"]
+  ["gemini-2.5-flash", "gemini-3.5-flash"]
 );
 
 export const GEMINI_ASSESSMENT_FALLBACKS = modelList(
   process.env.GEMINI_ASSESSMENT_FALLBACKS,
-  ["gemini-3.7-flash", "gemini-3.1-pro"]
+  ["gemini-3.5-flash", "gemini-3.6-flash"]
 );
 
 /** Speech generation. Only the *-tts models accept responseModalities: ["AUDIO"]. */
-export const GEMINI_TTS_MODEL = process.env.GEMINI_TTS_MODEL || "gemini-3.1-flash-tts";
+export const GEMINI_TTS_MODEL = process.env.GEMINI_TTS_MODEL || "gemini-3.1-flash-tts-preview";
 
 /**
  * Grading. Deliberately a different model from the interviewer so that a
@@ -72,7 +84,7 @@ export const GEMINI_CV_MODEL = process.env.GEMINI_CV_MODEL || "gemini-3.5-flash"
 
 export const GEMINI_CV_FALLBACKS = modelList(
   process.env.GEMINI_CV_FALLBACKS,
-  ["gemini-2.5-flash", "gemini-flash-latest"]
+  ["gemini-2.5-flash", "gemini-3.6-flash"]
 );
 
 export const GEMINI_API_KEY = process.env.GEMINI_API_KEY;

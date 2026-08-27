@@ -89,6 +89,25 @@ const BATCH_SIZE = 15;
 const MAX_TOP_UPS = 2;
 
 /**
+ * How long one batch may take, and how long the whole paper may.
+ *
+ * Measured rather than guessed: a batch of fifteen questions with four options
+ * and an explanation each runs 29–57 seconds on the models in the chain. The
+ * default 60s ceiling sat inside that spread, so an ordinary slow batch aborted
+ * mid-answer, was read as a transport failure, and sent the request down the
+ * fallback chain to be reported as whatever the last model there had to say.
+ * 120s clears the measured worst case with room for a bad day.
+ *
+ * The paper budget is what stops that generosity compounding. Two batches, each
+ * free to walk three models twice at 120s a go, is twenty minutes of work for a
+ * client that stopped listening after five. When the budget runs out the paper
+ * is returned short rather than abandoned — a student would rather sit twenty
+ * questions than see an error after four minutes of waiting.
+ */
+const BATCH_TIMEOUT_MS = Number.parseInt(process.env.GEMINI_EXAM_TIMEOUT_MS || "120000", 10);
+const PAPER_BUDGET_MS = Number.parseInt(process.env.GEMINI_EXAM_BUDGET_MS || "240000", 10);
+
+/**
  * Below this the paper is not worth sitting, and the caller is better off
  * seeing an error at setup than a student discovering it mid-exam.
  *
@@ -178,13 +197,15 @@ const normalizeQuestion = (raw, optionCount) => {
 };
 
 /** One model call: raw questions in the requested shape, unvalidated. */
-const requestBatch = async (jobData, options) => {
+const requestBatch = async (jobData, options, deadline) => {
   const messages = buildExamPrompt(jobData, options);
 
   const result = await callGemini({
     messages,
     temperature: 0.8,
     responseSchema: examSchema,
+    timeoutMs: BATCH_TIMEOUT_MS,
+    deadline,
   });
 
   const parsed = parseJsonResponse(result);
@@ -208,6 +229,7 @@ export const generateExamQuestions = async (
   const accepted = [];
   const seen = new Set();
   let topUps = 0;
+  const deadline = Date.now() + PAPER_BUDGET_MS;
 
   const take = (rawQuestions) => {
     for (const raw of rawQuestions) {
@@ -230,17 +252,30 @@ export const generateExamQuestions = async (
     const before = accepted.length;
 
     take(
-      await requestBatch(jobData, {
-        mode,
-        questionCount: batchSize,
-        totalCount: questionCount,
-        startNumber: accepted.length + 1,
-        // Only the tail is sent: a full list of thirty questions would crowd the
-        // source material out of the prompt, and near-duplicates cluster in
-        // adjacent batches anyway.
-        avoid: accepted.slice(-BATCH_SIZE * 2).map((question) => question.question_text),
-      })
+      await requestBatch(
+        jobData,
+        {
+          mode,
+          questionCount: batchSize,
+          totalCount: questionCount,
+          startNumber: accepted.length + 1,
+          // Only the tail is sent: a full list of thirty questions would crowd
+          // the source material out of the prompt, and near-duplicates cluster
+          // in adjacent batches anyway.
+          avoid: accepted.slice(-BATCH_SIZE * 2).map((question) => question.question_text),
+        },
+        deadline
+      )
     );
+
+    // Whatever is on the paper by now is what the student gets. Asking for
+    // another batch would only spend a budget that has already run out.
+    if (Date.now() >= deadline) {
+      warn(
+        `Exam generation: out of time with ${accepted.length}/${questionCount} questions written`
+      );
+      break;
+    }
 
     // A batch that added nothing usable will not do better on the next attempt
     // with the same prompt, so the top-up budget is what stops this looping.

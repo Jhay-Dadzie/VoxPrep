@@ -250,6 +250,32 @@ export const tailoredCvSchema = {
  */
 const RETRYABLE_STATUS = new Set([429, 500, 503, 404]);
 
+/**
+ * Of those, the ones a short pause can actually clear.
+ *
+ * A 503 is a capacity spike on Google's side and is usually over in seconds, so
+ * a chain that declined all the way through is worth walking a second time. A
+ * 429 is this key's quota for that model, which will not come back inside a
+ * request someone is waiting on, and a 404 is a model that no longer exists —
+ * pausing for either only makes the same failure slower.
+ */
+const TRANSIENT_STATUS = new Set([500, 503]);
+
+/** How many times the whole candidate chain is walked. */
+const MAX_PASSES = 2;
+
+/**
+ * Long enough for a capacity spike to pass, short enough that it disappears
+ * against a call that already takes ten seconds. Read per call rather than at
+ * import so a test can turn it down without racing module initialisation.
+ */
+const retryPauseMs = () => {
+  const configured = Number.parseInt(process.env.GEMINI_RETRY_PAUSE_MS || "", 10);
+  return Number.isFinite(configured) && configured >= 0 ? configured : 1500;
+};
+
+const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 // A request that is reset before Gemini sends an HTTP response has no status
 // for callGemini() to inspect. Treat the common transport failures as a
 // temporary upstream outage so the caller can try the next configured model.
@@ -261,10 +287,25 @@ const RETRYABLE_NETWORK_CODES = new Set([
   "ENETUNREACH",
 ]);
 
-const GEMINI_TIMEOUT_MS = Number.parseInt(process.env.GEMINI_TIMEOUT_MS || "60000", 10);
+/**
+ * The default per-call budget, which suits a conversational turn: one question,
+ * a few hundred tokens, back inside a couple of seconds.
+ *
+ * It does not suit every caller. A batch of fifteen exam questions with their
+ * options and explanations was measured at 29–57 seconds against this ceiling —
+ * close enough that an ordinary slow run aborts, and an aborted run looks like
+ * a transport failure, walks the whole fallback chain and reports whatever the
+ * last model in it said. Callers doing that much work pass their own timeoutMs.
+ */
+export const GEMINI_TIMEOUT_MS = Number.parseInt(process.env.GEMINI_TIMEOUT_MS || "60000", 10);
+
+const timeoutFor = (timeoutMs) => {
+  const requested = Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : GEMINI_TIMEOUT_MS;
+  return Number.isFinite(requested) && requested > 0 ? requested : 60000;
+};
 
 /** One generateContent call against one model. */
-const requestGemini = async ({ model, messages, generationConfig }) => {
+const requestGemini = async ({ model, messages, generationConfig, timeoutMs }) => {
   try {
     const response = await axios.post(
       `${GEMINI_ENDPOINT}/models/${model}:generateContent`,
@@ -278,9 +319,7 @@ const requestGemini = async ({ model, messages, generationConfig }) => {
           "Content-Type": "application/json",
           "x-goog-api-key": GEMINI_API_KEY,
         },
-        timeout: Number.isFinite(GEMINI_TIMEOUT_MS) && GEMINI_TIMEOUT_MS > 0
-          ? GEMINI_TIMEOUT_MS
-          : 60000,
+        timeout: timeoutFor(timeoutMs),
       }
     );
 
@@ -308,10 +347,17 @@ const requestGemini = async ({ model, messages, generationConfig }) => {
     if (!error.response) {
       if (!isTransportError) throw error;
 
+      // Named for the transport, not for the job. This function serves every
+      // caller — interviewer, grader, exam, CV — so a message naming one of
+      // them is wrong in the logs of the other three, and a timed-out exam
+      // batch reporting that a CV could not be tailored is how a slow call
+      // gets mistaken for a broken feature.
       const transport = new Error(
-        error.code === "ECONNRESET"
-          ? "The Gemini connection was reset before the CV could be tailored"
-          : "The Gemini service could not be reached while tailoring the CV"
+        error.code === "ECONNABORTED" || error.code === "ETIMEDOUT"
+          ? `Gemini did not answer within ${timeoutFor(timeoutMs) / 1000}s`
+          : error.code === "ECONNRESET"
+            ? "The Gemini connection was reset before it answered"
+            : "The Gemini service could not be reached"
       );
       transport.statusCode = 503;
       transport.code = error.code;
@@ -325,8 +371,51 @@ const requestGemini = async ({ model, messages, generationConfig }) => {
     );
     surfaced.statusCode = error.response.status || apiError.code || 500;
     surfaced.details = error.response.data || null;
+
+    // Google says when to come back on some 429s and 503s. Honouring it beats
+    // guessing, and it is the only signal that distinguishes "try in a second"
+    // from "this quota is gone for the day".
+    const retryAfter = Number.parseInt(error.response.headers?.["retry-after"], 10);
+    if (Number.isFinite(retryAfter) && retryAfter > 0) {
+      surfaced.retryAfterMs = retryAfter * 1000;
+    }
+
     throw surfaced;
   }
+};
+
+/**
+ * Pick the failure worth reporting once every candidate has declined.
+ *
+ * Throwing whichever model happened to be last in the chain is how a dead
+ * fallback comes to speak for the whole request: the primary would answer 429
+ * "quota exceeded", and the user would be told about high demand on a model
+ * nobody chose. So a 429 wins — it is the one an operator can act on — and
+ * failing that the primary's answer stands, because it is the model the
+ * configuration actually meant to use.
+ *
+ * The full chain rides along on `.attempts` for the log; it is not put on
+ * `.details`, which carries Google's own error body.
+ */
+const declinedError = (attempts) => {
+  // The budget can run out before a single candidate is tried, when an earlier
+  // call in the same job spent all of it.
+  if (attempts.length === 0) {
+    const expired = new Error("Ran out of time before any model could be asked");
+    expired.statusCode = 503;
+    expired.attempts = [];
+    return expired;
+  }
+
+  const chosen = attempts.find((attempt) => attempt.status === 429) || attempts[0];
+
+  chosen.error.attempts = attempts.map(({ model, status, message }) => ({
+    model,
+    status,
+    message,
+  }));
+
+  return chosen.error;
 };
 
 /**
@@ -337,8 +426,19 @@ const requestGemini = async ({ model, messages, generationConfig }) => {
  * question answered by a different model is a far better outcome than no
  * question at all.
  *
+ * When every candidate declines and at least one did so with a capacity error,
+ * the chain is walked once more after a pause. Without that, a spike lasting a
+ * couple of seconds takes the request down, because the first pass spends all
+ * three candidates inside a few hundred milliseconds — they are tried in the
+ * time it takes one of them to become available again.
+ *
  * @param {object}          params
- * @param {string|string[]} [params.model] - model, or ordered candidates to try
+ * @param {string|string[]} [params.model]     - model, or ordered candidates to try
+ * @param {number}          [params.timeoutMs] - per-call ceiling; defaults to GEMINI_TIMEOUT_MS
+ * @param {number}          [params.deadline]  - Date.now() past which no further
+ *   candidate is tried. Without one, walking three models twice can spend six
+ *   times the per-call timeout on a single call — long after the client that
+ *   asked for it has given up and stopped listening.
  */
 export const callGemini = async ({
   messages,
@@ -346,6 +446,8 @@ export const callGemini = async ({
   responseSchema,
   responseMimeType = "application/json",
   model = [GEMINI_MODEL, ...GEMINI_MODEL_FALLBACKS],
+  timeoutMs,
+  deadline,
 }) => {
   if (!GEMINI_API_KEY) {
     throw new Error("Missing Gemini API key");
@@ -364,34 +466,80 @@ export const callGemini = async ({
     throw new Error("No Gemini model configured");
   }
 
-  let lastError;
+  const attempts = [];
+  let pauseMs = retryPauseMs();
 
-  for (const [index, candidate] of candidates.entries()) {
-    try {
-      const text = await requestGemini({ model: candidate, messages, generationConfig });
+  /** Time left to spend, or null when the caller set no deadline. */
+  const remaining = () => (deadline ? deadline - Date.now() : null);
 
-      if (index > 0) {
-        warn(`Gemini: "${candidate}" answered after ${index} model(s) declined`);
+  // A tenth of a second is not enough for a model to answer in; asking anyway
+  // just converts the deadline into a timeout error with a worse message.
+  const outOfTime = () => remaining() !== null && remaining() < 1000;
+
+  for (let pass = 0; pass < MAX_PASSES; pass += 1) {
+    for (const candidate of candidates) {
+      if (outOfTime()) {
+        warn(`Gemini: out of time before "${candidate}" could be tried`);
+        break;
       }
 
-      return text;
-    } catch (error) {
-      lastError = error;
+      try {
+        const left = remaining();
+        const text = await requestGemini({
+          model: candidate,
+          messages,
+          generationConfig,
+          // Never let one candidate overrun the budget meant for the chain.
+          timeoutMs: left === null ? timeoutMs : Math.min(timeoutFor(timeoutMs), left),
+        });
 
-      const isLast = index === candidates.length - 1;
-      if (isLast || !RETRYABLE_STATUS.has(error.statusCode)) {
-        console.error("Gemini Error:", error.details || error.message || error);
-        throw error;
+        if (attempts.length > 0) {
+          warn(`Gemini: "${candidate}" answered after ${attempts.length} declined attempt(s)`);
+        }
+
+        return text;
+      } catch (error) {
+        // Not a capacity problem: every model would answer this identically, so
+        // spending the rest of the chain on it only fails slower.
+        if (!RETRYABLE_STATUS.has(error.statusCode)) {
+          console.error("Gemini Error:", error.details || error.message || error);
+          throw error;
+        }
+
+        attempts.push({
+          model: candidate,
+          status: error.statusCode,
+          message: error.message,
+          error,
+        });
+
+        if (error.retryAfterMs) pauseMs = Math.max(pauseMs, error.retryAfterMs);
+
+        warn(`Gemini model "${candidate}" unavailable (${error.statusCode}: ${error.message})`);
       }
-
-      warn(
-        `Gemini model "${candidate}" unavailable (${error.statusCode}: ${error.message}); ` +
-        `trying "${candidates[index + 1]}"`
-      );
     }
+
+    // Only what a pause can clear is worth pausing for, and only if there is a
+    // pass and enough of the budget left to spend on it.
+    const thisPass = attempts.slice(-candidates.length);
+    const spikey = thisPass.some((attempt) => TRANSIENT_STATUS.has(attempt.status));
+    if (pass === MAX_PASSES - 1 || !spikey) break;
+    if (remaining() !== null && remaining() < pauseMs + 1000) {
+      warn("Gemini: not enough of the budget left to walk the chain again");
+      break;
+    }
+
+    warn(`Gemini: every model declined; walking the chain again in ${pauseMs}ms`);
+    await pause(pauseMs);
   }
 
-  throw lastError;
+  const failure = declinedError(attempts);
+  console.error(
+    "Gemini Error: every model declined —",
+    failure.attempts.map(({ model, status }) => `${model}:${status}`).join(", ")
+  );
+
+  throw failure;
 };
 
 export const callOpenAI = callGemini;
