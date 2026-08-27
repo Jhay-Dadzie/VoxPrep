@@ -72,7 +72,7 @@ export const tailorCvForSession = async (sessionId, userId, file, { candidateNam
 
   let cvText;
   try {
-    cvText = await parseDocument(file.buffer, file.originalname);
+    cvText = await parseDocument(file.buffer, file.originalname, file.mimetype);
   } catch (parseError) {
     const failed = new Error(`Could not read that CV: ${parseError.message}`);
     failed.statusCode = 400;

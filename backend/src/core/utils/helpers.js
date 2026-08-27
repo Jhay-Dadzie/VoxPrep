@@ -1,4 +1,26 @@
 /**
+ * Strip characters Postgres will not accept inside a text value.
+ *
+ * PDF and DOCX extraction routinely emits NUL bytes and stray control codes —
+ * padding in the font tables, ligature mappings, artefacts of a UTF-16 source.
+ * They are invisible on screen and harmless in JavaScript, so nothing complains
+ * until the insert: PostgREST sends the row as JSON, Postgres parses it, and
+ * a bare U+0000 fails the whole statement with "unsupported Unicode escape sequence".
+ * The user sees a 500 on an upload that looked fine.
+ *
+ * Lone surrogates go the same way ("invalid Unicode surrogate pair") and arrive
+ * from the same place, so they are removed here too. Tabs and newlines are kept
+ * — they carry the layout the title derivation and the model both read.
+ */
+const UNSTORABLE_CONTROLS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g;
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
+
+export const sanitizeText = (text) => {
+  if (typeof text !== 'string') return text;
+  return text.replace(UNSTORABLE_CONTROLS, '').replace(LONE_SURROGATE, '');
+};
+
+/**
  * Extract key skills from job description text
  */
 export const extractSkills = (text) => {
@@ -96,6 +118,7 @@ export const hasRealAnswer = (text) => {
 };
 
 export default {
+  sanitizeText,
   extractSkills,
   detectExperienceLevel,
   detectIndustry,
