@@ -11,7 +11,6 @@ import { Colors } from '@/constants/theme'
 import {
   ACCEPTED_DOCUMENT_LABEL,
   ACCEPTED_DOCUMENT_TYPES,
-  MAX_UPLOAD_MB,
 } from '@/constants/uploads'
 import { cvService } from '@/services/cv'
 import { downloadTailoredCv, shareTailoredCv, type CvDownloadResult } from '@/lib/cv-pdf'
@@ -301,7 +300,7 @@ function OfferStep({
             <ThemedText style={[styles.cardBody, { color: colors.subtext }]}>
               {working
                 ? 'Reading your CV and rewriting it against the job description. This takes up to a minute.'
-                : `${ACCEPTED_DOCUMENT_LABEL}, up to ${MAX_UPLOAD_MB} MB. A text-based file — a scan or photo has no text to read.`}
+                : `${ACCEPTED_DOCUMENT_LABEL}. A text-based file — a scan or photo has no text to read.`}
             </ThemedText>
 
             <Pressable

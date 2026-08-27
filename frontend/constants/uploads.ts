@@ -32,6 +32,3 @@ export const ACCEPTED_DOCUMENT_TYPES = [
 /** The same set in the words a user uses, for the upload box. */
 export const ACCEPTED_DOCUMENT_LABEL =
   'PDF, Word, PowerPoint, Excel, OpenDocument, RTF, Markdown, CSV or TXT'
-
-/** The ceiling the upload middleware enforces, stated before the upload fails. */
-export const MAX_UPLOAD_MB = 15

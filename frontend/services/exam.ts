@@ -23,8 +23,15 @@ import { parseApiError } from './error-handler'
  * two sequential model calls for a thirty-question paper — so it is the longest
  * request the app makes and needs a ceiling to match. Everything after it is
  * ordinary CRUD: a tap is one small PUT, and marking is arithmetic.
+ *
+ * Held just above the server's own budget for writing a paper (240s, see
+ * GEMINI_EXAM_BUDGET_MS). A single measured batch runs 29–57 seconds and there
+ * are two of them, so 180s here was abandoning papers the server was still
+ * writing and would have delivered — and giving up on a request the server has
+ * no idea has been abandoned is the one outcome that wastes the whole thing.
+ * The server is the side that gives up first, so that it can answer when it does.
  */
-const PREPARE_TIMEOUT_MS = 180_000
+const PREPARE_TIMEOUT_MS = 270_000
 
 const toSession = (session: ApiExamSession): ExamSession => ({
   id: session.id,
