@@ -38,6 +38,7 @@
  */
 
 import { getSupabaseAdminClient } from '../../config/supabase.js';
+import { runQuery, runQueryResult } from '../../core/utils/supabaseQuery.js';
 
 let supabase;
 
@@ -95,8 +96,11 @@ export const getHistorySessions = async (
     query = query.ilike('session_title', `%${search}%`);
   }
 
-  const { data, error, count } = await query.range(from, to);
-  if (error) throw new Error(error.message);
+  const { data, count } = await runQueryResult(
+    'load your history',
+    () => query.range(from, to),
+    { replaySafe: true }
+  );
 
   return {
     data: data || [],
@@ -243,16 +247,22 @@ export const getHistorySessionById = async (sessionId, userId) => {
 export const setArchiveStatus = async (sessionId, userId, isArchived) => {
   const supabase = getSupabase();
 
-  const { data, error } = await supabase
-    .from('interview_sessions')
-    .update({ is_archived: isArchived })
-    .eq('id', sessionId)
-    .eq('user_id', userId)
-    .in('status', HISTORY_STATUSES)
-    .select('id, is_archived')
-    .maybeSingle();
+  // Replay-safe: the update sets a fixed value on one row, so running it twice
+  // leaves exactly what running it once does.
+  const data = await runQuery(
+    isArchived ? 'archive that session' : 'unarchive that session',
+    () =>
+      supabase
+        .from('interview_sessions')
+        .update({ is_archived: isArchived })
+        .eq('id', sessionId)
+        .eq('user_id', userId)
+        .in('status', HISTORY_STATUSES)
+        .select('id, is_archived')
+        .maybeSingle(),
+    { replaySafe: true }
+  );
 
-  if (error) throw new Error(error.message);
   if (!data) throw new Error('Session not found in history');
 
   return data;
@@ -269,16 +279,21 @@ export const setArchiveStatus = async (sessionId, userId, isArchived) => {
 export const updateNotes = async (sessionId, userId, notes) => {
   const supabase = getSupabase();
 
-  const { data, error } = await supabase
-    .from('interview_sessions')
-    .update({ notes: notes || null })
-    .eq('id', sessionId)
-    .eq('user_id', userId)
-    .in('status', HISTORY_STATUSES)
-    .select('id, notes')
-    .maybeSingle();
+  // Replay-safe for the same reason as the archive toggle: one row, one value.
+  const data = await runQuery(
+    'save your notes',
+    () =>
+      supabase
+        .from('interview_sessions')
+        .update({ notes: notes || null })
+        .eq('id', sessionId)
+        .eq('user_id', userId)
+        .in('status', HISTORY_STATUSES)
+        .select('id, notes')
+        .maybeSingle(),
+    { replaySafe: true }
+  );
 
-  if (error) throw new Error(error.message);
   if (!data) throw new Error('Session not found in history');
 
   return data;
@@ -298,16 +313,23 @@ export const updateNotes = async (sessionId, userId, notes) => {
 export const deleteHistorySession = async (sessionId, userId) => {
   const supabase = getSupabase();
 
-  const { data, error } = await supabase
-    .from('interview_sessions')
-    .delete()
-    .eq('id', sessionId)
-    .eq('user_id', userId)
-    .in('status', HISTORY_STATUSES)
-    .select('id')
-    .maybeSingle();
+  // Deliberately not replaySafe. A delete whose response was lost has already
+  // removed the row, so a replay would find nothing and report the session
+  // missing rather than deleted. A token rejected for its clock is replayed
+  // anyway, and safely: that one never reached the database at all.
+  const data = await runQuery(
+    'delete that session',
+    () =>
+      supabase
+        .from('interview_sessions')
+        .delete()
+        .eq('id', sessionId)
+        .eq('user_id', userId)
+        .in('status', HISTORY_STATUSES)
+        .select('id')
+        .maybeSingle()
+  );
 
-  if (error) throw new Error(error.message);
   if (!data) throw new Error('Session not found in history');
 
   return true;
@@ -339,14 +361,17 @@ export const getHistoryStats = async (userId) => {
   for (let page = 0; page < STATS_MAX_PAGES; page += 1) {
     const from = page * STATS_PAGE_SIZE;
 
-    const { data, error, count } = await supabase
-      .from('interview_sessions')
-      .select('overall_score', { count: 'exact' })
-      .eq('user_id', userId)
-      .in('status', HISTORY_STATUSES)
-      .range(from, from + STATS_PAGE_SIZE - 1);
-
-    if (error) throw new Error(error.message);
+    const { data, count } = await runQueryResult(
+      'work out your stats',
+      () =>
+        supabase
+          .from('interview_sessions')
+          .select('overall_score', { count: 'exact' })
+          .eq('user_id', userId)
+          .in('status', HISTORY_STATUSES)
+          .range(from, from + STATS_PAGE_SIZE - 1),
+      { replaySafe: true }
+    );
 
     const rows = data || [];
     if (count != null) total = count;
