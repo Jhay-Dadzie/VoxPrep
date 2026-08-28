@@ -42,6 +42,32 @@ export const isTransportFailure = (error) =>
   );
 
 /**
+ * A token Supabase signed itself but will not yet accept.
+ *
+ * "JWT issued at future" means the node checking the token has a clock behind
+ * the node that minted it. Nothing is wrong with the request, the token or our
+ * clock — it is skew between two machines at the other end, and it passes on
+ * its own within seconds.
+ *
+ * It matters that this is told apart from the two failures it resembles. It is
+ * not a transport failure: the request arrived and was answered, so it carries
+ * a code and would never match `isTransportFailure`. And it is not an expired
+ * token: expiry is the client's problem and is fixed by refreshing, while this
+ * is fixed by waiting. Conflating it with either is how a momentary skew at
+ * Supabase reached a user's phone as a 500.
+ */
+export const isClockSkewFailure = (error) =>
+  !!error && /issued at future|used before issued|not yet valid|before issued at/i.test(
+    `${error.message ?? ''} ${error.details ?? ''}`
+  );
+
+/** A token that was fine and is not any more. The client has to refresh. */
+export const isExpiredTokenFailure = (error) =>
+  !!error && /jwt expired|token (?:is )?expired|token has expired/i.test(
+    `${error.message ?? ''} ${error.details ?? ''}`
+  );
+
+/**
  * Turn a postgrest error into a thrown Error that still says what went wrong.
  *
  * `details` is where the useful text lives — postgrest puts the undici cause
@@ -51,18 +77,30 @@ export const isTransportFailure = (error) =>
  */
 export const supabaseError = (label, error) => {
   const transport = isTransportFailure(error);
+  const skew = isClockSkewFailure(error);
+  const expired = isExpiredTokenFailure(error);
 
   // What the user reads has to be about their situation, not about undici. The
   // technical text is not lost — it rides along on the error and the logger
   // writes it out — but "TypeError: fetch failed" reaching a student's phone
-  // told them nothing, least of all that trying again might work.
+  // told them nothing, least of all that trying again might work. "JWT issued
+  // at future" told them even less, and told them it was their fault.
   const failed = new Error(
     transport
       ? `Could not reach the database to ${label}. This is usually momentary — please try again.`
-      : `Could not ${label}: ${error?.message || 'the database rejected the request'}`
+      : skew
+        ? `Could not ${label} just then. This is usually momentary — please try again.`
+        : expired
+          ? 'Your session has expired. Please sign in again.'
+          : `Could not ${label}: ${error?.message || 'the database rejected the request'}`
   );
 
-  if (transport) failed.statusCode = 503;
+  // Skew is not the caller's fault and not their problem to fix, so it reads as
+  // an upstream blip. Expiry is a 401 precisely so the client's own refresh
+  // handling fires, which a 500 never does.
+  if (transport || skew) failed.statusCode = 503;
+  if (expired) failed.statusCode = 401;
+
   failed.details = error?.details || null;
   failed.hint = error?.hint || null;
   failed.pgCode = error?.code || null;
@@ -70,7 +108,11 @@ export const supabaseError = (label, error) => {
 };
 
 /**
- * Run a Supabase query, retrying only what is safe to retry.
+ * Run a Supabase query, retrying only what is safe to retry, and hand back the
+ * whole postgrest result — `{ data, count, status, ... }`.
+ *
+ * For callers that asked for a count alongside the rows. Most callers want
+ * `runQuery` below, which is this with the rows unwrapped.
  *
  * @param {string}   label - what was being done, for the error and the log
  * @param {Function} run   - builds and runs the query; called again on a replay
@@ -84,14 +126,22 @@ export const supabaseError = (label, error) => {
  *        Runs before each replay — the place to delete whatever the failed
  *        attempt may have written, which is what makes a write replay-safe.
  */
-export const runQuery = async (label, run, { replaySafe = false, before } = {}) => {
+export const runQueryResult = async (label, run, { replaySafe = false, before } = {}) => {
   for (let attempt = 0; ; attempt += 1) {
-    const { data, error } = await run();
+    const result = await run();
+    const { error } = result;
 
-    if (!error) return data;
+    if (!error) return result;
 
     const failed = supabaseError(label, error);
-    const canReplay = replaySafe && attempt < MAX_REPLAYS && isTransportFailure(error);
+
+    // Skew is replayable whatever the caller said. A token rejected for its
+    // `iat` is rejected at the door, before any statement runs, so replaying it
+    // cannot write anything twice — the safety `replaySafe` guards against does
+    // not arise. Waiting is the only thing that fixes it, and a second of it is
+    // cheaper than handing the user an error for a condition already over.
+    const canReplay = attempt < MAX_REPLAYS
+      && (isClockSkewFailure(error) || (replaySafe && isTransportFailure(error)));
 
     if (!canReplay) throw failed;
 
@@ -105,4 +155,15 @@ export const runQuery = async (label, run, { replaySafe = false, before } = {}) 
   }
 };
 
-export default { runQuery, supabaseError, isTransportFailure };
+/** The common case: the rows, or a thrown error. */
+export const runQuery = async (label, run, options) =>
+  (await runQueryResult(label, run, options)).data;
+
+export default {
+  runQuery,
+  runQueryResult,
+  supabaseError,
+  isTransportFailure,
+  isClockSkewFailure,
+  isExpiredTokenFailure,
+};
