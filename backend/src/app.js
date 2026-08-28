@@ -145,12 +145,25 @@ app.use((req, res) => {
  * ============================================================================
  */
 
-// Centralized error handling
+/**
+ * Centralized error handling.
+ *
+ * An error that named its own status said something deliberate about what the
+ * client should do, so its message is meant to be read and is passed through.
+ * Anything reaching here without one is a fault nobody anticipated, and its
+ * message is an internal detail: "JWT issued at future" is what a user was once
+ * shown for a momentary clock difference between two machines at Supabase — a
+ * sentence that describes our plumbing, blames them for it, and offers nothing
+ * to do about it. Those become one flat line, and the real text goes to the log
+ * above, which is where whoever can act on it is looking.
+ */
 app.use((err, req, res, next) => {
   error('Unhandled error:', err);
 
   const statusCode = err.statusCode || err.status || 500;
-  const message = err.message || 'Internal server error';
+  const message = statusCode >= 500 && !err.statusCode && !err.status
+    ? 'Something went wrong on our end. Please try again.'
+    : err.message || 'Internal server error';
 
   res.status(statusCode).json({
     success: false,
