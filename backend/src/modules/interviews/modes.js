@@ -87,10 +87,13 @@ const MODES = {
     typeMix:
       'roughly 50% technical (concept recall and application), 30% situational (applied reasoning), 20% general (synthesis)',
     guidance: [
-      'Draw every question strictly from the supplied material. Never test anything it does not cover.',
-      'Exactly one option must be defensibly correct; the other three must be wrong on the material, not merely worse.',
+      'Test the concepts, terms and principles the material covers — not the wording it covers them in.',
+      'Application is expected, not just recall: put a concept to work in a fresh scenario, a short worked case, a prediction, or a choice between approaches. The reasoning must be one the material teaches, even where the exact case is new.',
+      'Never require a fact, formula, figure or convention the material never introduces.',
+      'Write every question as if it were printed on a paper the student sits with nothing in front of them. Never refer to the material, the document, the text, the notes, the slides, the lecture, the author, or "the passage".',
+      'Exactly one option must be defensibly correct; the other three must be wrong on the subject, not merely worse.',
       'Distractors must be plausible — a common misconception, a neighbouring concept, or a right answer to a different question. Never filler.',
-      'Vary what is tested: definitions, application, comparison between two concepts, and reading a result or example.',
+      'Vary what is tested: definitions, application to a new case, comparison between two concepts, and reading a result or example.',
       'Escalate across the paper: recall first, application in the middle, synthesis last.',
       'Explain why the correct option is correct in one or two sentences, in terms a student who chose wrongly can learn from.',
     ],

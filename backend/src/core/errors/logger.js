@@ -32,11 +32,21 @@ const logger = {
     if (isDevelopment) {
       console.error(`[${timestamp}] ERROR: ${message}`, error ? error : '');
     } else {
+      // `details` and `cause` are where the actual explanation lives when the
+      // failure came from a client library: postgrest-js reports a dropped
+      // connection as the message "TypeError: fetch failed" and puts the real
+      // reason ("Caused by: SocketError: other side closed") in details, and
+      // undici puts it in cause. Logging the message alone turned every
+      // network fault into the same unactionable line.
       console.error(JSON.stringify({
         timestamp,
         level: 'error',
         message,
         error: error?.message || error,
+        ...(error?.details ? { details: `${error.details}`.slice(0, 2000) } : {}),
+        ...(error?.hint ? { hint: error.hint } : {}),
+        ...(error?.cause ? { cause: `${error.cause}` } : {}),
+        ...(error?.stack ? { stack: error.stack } : {}),
       }));
     }
   },
