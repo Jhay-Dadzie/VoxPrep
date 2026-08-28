@@ -9,7 +9,13 @@ jest.mock('../../core/errors/logger.js', () => ({
   default: {},
 }));
 
-import { isTransportFailure, runQuery, supabaseError } from '../../core/utils/supabaseQuery.js';
+import {
+  isClockSkewFailure,
+  isTransportFailure,
+  runQuery,
+  runQueryResult,
+  supabaseError,
+} from '../../core/utils/supabaseQuery.js';
 
 /**
  * The failure this guards: POST /exams/prepare spent two minutes writing a
@@ -36,6 +42,26 @@ const rejectedByPostgres = {
   details: 'Key (id)=(…) already exists.',
   hint: '',
   code: '23505',
+};
+
+/**
+ * What Supabase returns when the node checking a token has a clock behind the
+ * node that signed it. Seen on GET /history/stats, where it reached the phone
+ * as a 500 reading "JWT issued at future".
+ */
+const clockSkew = {
+  message: 'JWT issued at future',
+  details: null,
+  hint: null,
+  code: 'PGRST301',
+};
+
+/** The same family, but the client's problem rather than Supabase's. */
+const expiredToken = {
+  message: 'JWT expired',
+  details: null,
+  hint: null,
+  code: 'PGRST301',
 };
 
 describe('telling a dropped connection from a rejected query', () => {
@@ -130,5 +156,85 @@ describe('runQuery', () => {
 
     await expect(runQuery('save it', run, { replaySafe: true })).rejects.toThrow(/try again/i);
     expect(run).toHaveBeenCalledTimes(3);
+  });
+});
+
+/**
+ * A token Supabase signed and then would not accept.
+ *
+ * "JWT issued at future" is clock skew between two machines at the far end. It
+ * carries a code, so it is not a transport failure; it is over in seconds, so
+ * it is not an expired session; and it reached a user as a 500 blaming them for
+ * neither.
+ */
+describe('a token rejected for its clock', () => {
+  it('is not mistaken for a dropped connection', () => {
+    expect(isClockSkewFailure(clockSkew)).toBe(true);
+    expect(isTransportFailure(clockSkew)).toBe(false);
+  });
+
+  it('is not mistaken for an ordinary database rejection', () => {
+    expect(isClockSkewFailure(rejectedByPostgres)).toBe(false);
+  });
+
+  it('reads as momentary, and never mentions JWTs', () => {
+    const failed = supabaseError('work out your stats', clockSkew);
+
+    expect(failed.message).toMatch(/try again/i);
+    expect(failed.message).not.toMatch(/JWT/i);
+    // 503, not 500: the fault is upstream and nothing about the request is wrong.
+    expect(failed.statusCode).toBe(503);
+  });
+
+  it('is retried even on a query the caller never marked replay-safe', async () => {
+    // Safe because the token is rejected at the door: no statement ever runs.
+    const run = jest
+      .fn()
+      .mockResolvedValueOnce({ data: null, error: clockSkew })
+      .mockResolvedValueOnce({ data: { id: 'abc' }, error: null });
+
+    expect(await runQuery('delete that session', run)).toEqual({ id: 'abc' });
+    expect(run).toHaveBeenCalledTimes(2);
+  });
+
+  it('still gives up rather than waiting out a skew that never clears', async () => {
+    const run = jest.fn().mockResolvedValue({ data: null, error: clockSkew });
+
+    await expect(runQuery('work out your stats', run)).rejects.toMatchObject({ statusCode: 503 });
+    expect(run).toHaveBeenCalledTimes(3);
+  });
+
+  it('sends an expired session to the client as a 401 it can refresh on', async () => {
+    const run = jest.fn().mockResolvedValue({ data: null, error: expiredToken });
+
+    await expect(runQuery('load your history', run)).rejects.toMatchObject({
+      statusCode: 401,
+      message: expect.stringMatching(/sign in again/i),
+    });
+    // Refreshing is the client's job; retrying here would only spend the wait.
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('runQueryResult', () => {
+  it('hands back the count alongside the rows', async () => {
+    const run = jest.fn().mockResolvedValue({ data: [{ id: 'a' }], error: null, count: 18 });
+
+    const result = await runQueryResult('work out your stats', run, { replaySafe: true });
+
+    expect(result.count).toBe(18);
+    expect(result.data).toEqual([{ id: 'a' }]);
+  });
+
+  it('retries clock skew and keeps the count from the answer that worked', async () => {
+    const run = jest
+      .fn()
+      .mockResolvedValueOnce({ data: null, error: clockSkew })
+      .mockResolvedValueOnce({ data: [{ id: 'a' }], error: null, count: 18 });
+
+    const result = await runQueryResult('work out your stats', run, { replaySafe: true });
+
+    expect(result.count).toBe(18);
+    expect(run).toHaveBeenCalledTimes(2);
   });
 });
