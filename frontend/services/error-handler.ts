@@ -43,7 +43,7 @@ const asDetails = (value: unknown): Record<string, string> | undefined => {
 }
 
 const isTechnicalMessage = (message: string) =>
-  /^(request failed with status code|network error$|timeout of .* exceeded$|invalid response from|no oauth url returned|no authorization code in callback|google signin failed|cannot store authentication tokens)/i.test(message)
+  /^(request failed with status code|network error$|timeout of .* exceeded$|invalid response from|no oauth url returned|no (session or )?authorization code in callback|google signin failed|cannot store authentication tokens)/i.test(message)
 
 export const parseApiError = (error: unknown): AuthError => {
   console.error('Raw error:', error)
