@@ -20,6 +20,18 @@ export function getSupabaseClient() {
   supabaseClient = createSupabaseClient(
     process.env.SUPABASE_URL,
     process.env.SUPABASE_PUBLISHABLE_KEY,
+    {
+      auth: {
+        // Pinned rather than left to the library default. PKCE would keep the
+        // code verifier in this shared singleton's in-process storage under one
+        // key, so two users signing in at once would clobber each other's
+        // verifier and a restart between init and callback would lose it.
+        // Implicit returns the session on the redirect itself, which the app
+        // hands back to POST /auth/google/session for verification.
+        flowType: 'implicit',
+        detectSessionInUrl: false,
+      },
+    },
   );
   return supabaseClient;
 }

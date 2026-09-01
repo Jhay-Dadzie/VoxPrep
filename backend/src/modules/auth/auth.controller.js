@@ -191,6 +191,37 @@ class AuthController {
   }
 
   /**
+   * POST /auth/google/session
+   * Complete Google sign-in from the tokens Supabase put in the redirect
+   * fragment. Used by the mobile app, which receives the deep link directly.
+   * Body: { access_token, refresh_token }
+   */
+  async googleSession(req, res) {
+    try {
+      const { access_token, refresh_token } = req.body || {};
+      const result = await authService.handleGoogleTokens({
+        accessToken: access_token,
+        refreshToken: refresh_token,
+      });
+
+      setRefreshTokenCookie(res, result.session?.refresh_token);
+      info(`Google login: ${result.user.email}`);
+
+      return res.status(200).json({
+        success: true,
+        message: 'Google login successful',
+        data: result,
+      });
+    } catch (error) {
+      _error('Google session error:', error);
+      return res.status(error.statusCode || 401).json({
+        success: false,
+        message: error.message || 'Google login failed',
+      });
+    }
+  }
+
+  /**
    * GET /auth/verify-email
    * Verify email using token from Supabase confirmation link
    */

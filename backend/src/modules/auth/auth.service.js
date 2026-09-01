@@ -417,6 +417,58 @@ class AuthService {
   }
 
   /**
+   * Complete Google sign-in from an implicit-flow redirect.
+   *
+   * Supabase returns the session in the redirect URL's fragment
+   * (`#access_token=...&refresh_token=...`) rather than as an exchangeable
+   * code, so the app reads it off the deep link and posts it here. The access
+   * token is verified against Supabase before any profile row is touched — an
+   * unverified token would let a caller bootstrap a profile for any user id it
+   * cared to claim.
+   */
+  async handleGoogleTokens({ accessToken, refreshToken }) {
+    if (!accessToken || !refreshToken) {
+      throw new AppError('Missing Google session tokens', 400);
+    }
+
+    if (shouldUseTestAuth()) {
+      return this._handleTestGoogleTokens(accessToken, refreshToken);
+    }
+
+    const supabase = getSupabaseClient();
+    const { data, error } = await supabase.auth.getUser(accessToken);
+
+    if (error || !data?.user) {
+      throw new AppError('Invalid or expired Google session', 401);
+    }
+
+    const { user } = data;
+    const googleAvatar = user.user_metadata?.avatar_url || user.user_metadata?.picture || null;
+    await initializeUserProfile(user.id, user.email, user.user_metadata?.full_name, accessToken, googleAvatar);
+
+    await this._logAudit({
+      user_id: user.id,
+      action: 'google_login',
+      resource_type: 'user',
+      resource_id: user.id,
+    });
+
+    return {
+      user: {
+        id: user.id,
+        email: user.email,
+        full_name: user.user_metadata?.full_name || null,
+        avatar_url: googleAvatar,
+      },
+      session: {
+        access_token: accessToken,
+        refresh_token: refreshToken,
+        token_type: 'bearer',
+      },
+    };
+  }
+
+  /**
    * Verify email using token from confirmation link
    */
   async verifyEmail(token, email) {
@@ -779,6 +831,22 @@ class AuthService {
         refresh_token: `test-refresh.${code}`,
         expires_in: 3600,
         expires_at: Math.floor(Date.now() / 1000) + 3600,
+        token_type: 'bearer',
+      },
+    };
+  }
+
+  async _handleTestGoogleTokens(accessToken, refreshToken) {
+    return {
+      user: {
+        id: `google-${accessToken}`,
+        email: `google-${accessToken}@example.com`,
+        full_name: null,
+        avatar_url: null,
+      },
+      session: {
+        access_token: accessToken,
+        refresh_token: refreshToken,
         token_type: 'bearer',
       },
     };

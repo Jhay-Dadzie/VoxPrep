@@ -13,6 +13,7 @@
  * - POST   /reset-password
  * - GET    /google (OAuth init)
  * - GET    /google/callback (OAuth callback)
+ * - POST   /google/session (OAuth completion from a deep-link redirect)
  * - GET    /verify-email (email confirmation)
  */
 
@@ -89,6 +90,14 @@ router.get('/google', asyncHandler(authController.googleAuth.bind(authController
  * Google OAuth callback (handled by Supabase)
  */
 router.get('/google/callback', asyncHandler(authController.googleCallback.bind(authController)));
+
+/**
+ * POST /api/v1/auth/google/session
+ * Complete Google OAuth from the session Supabase returns in the redirect
+ * fragment (the mobile deep-link path).
+ * Body: { access_token, refresh_token }
+ */
+router.post('/google/session', asyncHandler(authController.googleSession.bind(authController)));
 
 /**
  * GET /api/v1/auth/verify-email
