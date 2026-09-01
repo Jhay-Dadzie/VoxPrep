@@ -89,6 +89,7 @@ function RootLayoutInner() {
         <Stack.Screen name="cv-tailor" options={{ animation: 'fade' }} />
         <Stack.Screen name="settings" />
         <Stack.Screen name="history" />
+        <Stack.Screen name="oauth-callback" options={{ animation: 'none' }} />
       </Stack>
       <StatusBar style={colorScheme === 'dark' ? 'light' : 'dark'} />
     </NavThemeProvider>

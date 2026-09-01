@@ -144,6 +144,7 @@ apiClient.interceptors.response.use(
       if (
         url.includes('/auth/logout') ||
         url.includes('/auth/login') ||
+        url.includes('/auth/google') ||
         url.includes('/auth/refresh')
       ) {
         return Promise.reject(error)

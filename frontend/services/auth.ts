@@ -34,6 +34,62 @@ const storeAuthData = async (data: AuthData, operation: 'signup' | 'login'): Pro
   return data.user
 }
 
+/**
+ * Read the parameters off an OAuth redirect URL.
+ *
+ * Supabase splits the result across both halves of the URL depending on the
+ * flow: the implicit flow returns the session in the fragment
+ * (`#access_token=...&refresh_token=...`), PKCE returns `?code=...`, and a
+ * failure can land in either. Parsed by hand because React Native's `URL` does
+ * not expose the fragment of a custom-scheme link such as `frontend://`.
+ */
+const parseCallbackParams = (url: string): Record<string, string> => {
+  const params: Record<string, string> = {}
+  const [beforeFragment, fragment = ''] = url.split('#')
+  const query = beforeFragment.split('?').slice(1).join('?')
+
+  for (const segment of [query, fragment]) {
+    for (const pair of segment.split('&')) {
+      if (!pair) continue
+      const separator = pair.indexOf('=')
+      const key = separator === -1 ? pair : pair.slice(0, separator)
+      const value = separator === -1 ? '' : pair.slice(separator + 1)
+      params[decodeURIComponent(key)] = decodeURIComponent(value.replace(/\+/g, ' '))
+    }
+  }
+
+  return params
+}
+
+const completeGoogleCallback = async (params: Record<string, string>): Promise<AuthData> => {
+  if (params.access_token && params.refresh_token) {
+    const response = await apiClient.post<AuthResponse>('/auth/google/session', {
+      access_token: params.access_token,
+      refresh_token: params.refresh_token,
+    })
+
+    if (!response.data.data) {
+      throw new Error('Invalid response from google session')
+    }
+
+    return response.data.data
+  }
+
+  if (params.code) {
+    const response = await apiClient.get<AuthResponse>('/auth/google/callback', {
+      params: { code: params.code },
+    })
+
+    if (!response.data.data) {
+      throw new Error('Invalid response from google callback')
+    }
+
+    return response.data.data
+  }
+
+  throw new Error('No session or authorization code in callback')
+}
+
 const getAuthUser = (data: AuthData, operation: 'signup' | 'login'): StoredUser => {
   if (!data.user) {
     throw new Error(`Invalid response from ${operation}: missing user`)
@@ -179,28 +235,19 @@ export const authService = {
 
       const result = await WebBrowser.openAuthSessionAsync(oauthUrl, redirectUrl)
 
-      if (result.type === 'dismiss') {
+      // 'dismiss' when the iOS sheet is swiped away, 'cancel' on the Android
+      // back gesture - both mean the user backed out rather than failed.
+      if (result.type !== 'success' || !result.url) {
         throw new Error('Google signin was cancelled')
       }
 
-      if (result.type === 'success' && result.url) {
-        const parsedUrl = new URL(result.url)
-        const code = parsedUrl.searchParams.get('code')
+      const params = parseCallbackParams(result.url)
 
-        if (!code) {
-          throw new Error('No authorization code in callback')
-        }
-
-        const callbackResponse = await apiClient.get<AuthResponse>('/auth/google/callback', {
-          params: { code }
-        })
-
-        if (callbackResponse.data.data) {
-          return await storeAuthData(callbackResponse.data.data, 'login')
-        }
+      if (params.error || params.error_description) {
+        throw new Error(params.error_description || params.error)
       }
 
-      throw new Error('Google signin failed')
+      return await storeAuthData(await completeGoogleCallback(params), 'login')
     } catch (error) {
       console.error('Google signin error:', error)
       throw parseApiError(error)
