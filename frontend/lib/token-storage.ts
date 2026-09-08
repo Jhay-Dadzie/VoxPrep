@@ -8,6 +8,8 @@ export interface StoredUser {
   id: string
   email: string
   full_name: string | null
+  avatar_url?: string | null
+  avatar_updated_at?: string | null
   is_active: boolean
   profile_completed: boolean
   created_at: string

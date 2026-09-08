@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { StyleSheet, View, ScrollView, Image, Pressable, TextInput, Alert } from 'react-native'
+import { StyleSheet, View, ScrollView, Pressable, TextInput, Alert, ActivityIndicator } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import { router } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
@@ -9,13 +9,14 @@ import { Colors } from '@/constants/theme'
 import { useAuth } from '@/hooks/auth-context'
 import { userService } from '@/services/user'
 import { toAuthError } from '@/services/error-handler'
-
-const AVATAR = 'https://i.pravatar.cc/200?img=12'
+import { ProfileAvatar } from '@/components/profile-avatar'
+import { pickProfileImage } from '@/lib/profile-avatar'
 
 export default function PersonalInfo() {
   const colorScheme = useColorScheme()
   const colors = Colors[colorScheme ?? 'light']
   const { user, updateUser } = useAuth()
+  const [isAvatarSaving, setIsAvatarSaving] = useState(false)
 
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
@@ -63,6 +64,20 @@ export default function PersonalInfo() {
     }
   }
 
+  const handlePickAvatar = async () => {
+    try {
+      const uri = await pickProfileImage()
+      if (!uri) return
+      setIsAvatarSaving(true)
+      const updated = await userService.updateProfile({ avatar_url: uri })
+      await updateUser({ avatar_url: updated.avatar_url ?? uri })
+    } catch (err) {
+      setError(toAuthError(err).message)
+    } finally {
+      setIsAvatarSaving(false)
+    }
+  }
+
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.card }} edges={['top']}>
       <View style={[styles.header, { backgroundColor: colors.card, borderBottomColor: colors.border }]}>
@@ -79,9 +94,9 @@ export default function PersonalInfo() {
       >
         <View style={styles.avatarRow}>
           <View style={styles.avatarWrap}>
-            <Image source={{ uri: AVATAR }} style={styles.avatar} />
+            <ProfileAvatar user={user} size={84} colors={colors} onPress={handlePickAvatar} />
             <View style={[styles.editBadge, { backgroundColor: colors.tint, borderColor: colors.background }]}>
-              <Ionicons name="pencil" size={12} color="#fff" />
+              {isAvatarSaving ? <ActivityIndicator size="small" color="#fff" /> : <Ionicons name="pencil" size={12} color="#fff" />}
             </View>
           </View>
         </View>
@@ -170,7 +185,6 @@ const styles = StyleSheet.create({
 
   avatarRow: { alignItems: 'center', marginTop: 8, marginBottom: 18 },
   avatarWrap: { width: 84, height: 84 },
-  avatar: { width: 84, height: 84, borderRadius: 42 },
   editBadge: {
     position: 'absolute', right: -2, bottom: -2,
     width: 26, height: 26, borderRadius: 13,

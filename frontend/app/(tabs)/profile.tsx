@@ -1,5 +1,5 @@
-import React, { useState } from 'react'
-import { StyleSheet, View, ScrollView, Image, Pressable, Switch, Alert } from 'react-native'
+import React from 'react'
+import { StyleSheet, View, ScrollView, Pressable, Switch, Alert, ActivityIndicator } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import { router } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
@@ -8,14 +8,17 @@ import { useColorScheme } from '@/hooks/use-color-scheme'
 import { useThemeOverride } from '@/hooks/theme-context'
 import { Colors } from '@/constants/theme'
 import { useAuth } from '@/hooks/auth-context'
-
-const AVATAR = 'https://i.pravatar.cc/200?img=12'
+import { ProfileAvatar } from '@/components/profile-avatar'
+import { pickProfileImage } from '@/lib/profile-avatar'
+import { userService } from '@/services/user'
+import { toAuthError } from '@/services/error-handler'
 
 export default function Profile() {
   const colorScheme = useColorScheme()
   const colors = Colors[colorScheme ?? 'light']
   const { setOverride } = useThemeOverride()
-  const { user, logout, isLoading } = useAuth()
+  const { user, logout, isLoading, updateUser } = useAuth()
+  const [isAvatarSaving, setIsAvatarSaving] = React.useState(false)
   const dark = colorScheme === 'dark'
 
   const handleLogout = async () => {
@@ -41,6 +44,20 @@ export default function Profile() {
     )
   }
 
+  const handlePickAvatar = async () => {
+    try {
+      const uri = await pickProfileImage()
+      if (!uri) return
+      setIsAvatarSaving(true)
+      const updated = await userService.updateProfile({ avatar_url: uri })
+      await updateUser({ avatar_url: updated.avatar_url ?? uri })
+    } catch (error) {
+      Alert.alert('Profile picture', toAuthError(error).message)
+    } finally {
+      setIsAvatarSaving(false)
+    }
+  }
+
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.card }} edges={['top']}>
       <View style={[styles.header, { backgroundColor: colors.card, borderBottomColor: colors.border }]}>
@@ -61,9 +78,9 @@ export default function Profile() {
       >
         <View style={styles.identity}>
           <View style={styles.avatarWrap}>
-            <Image source={{ uri: AVATAR }} style={styles.avatar} />
+            <ProfileAvatar user={user} size={84} colors={colors} onPress={handlePickAvatar} />
             <View style={[styles.editBadge, { backgroundColor: colors.tint, borderColor: colors.background }]}>
-              <Ionicons name="pencil" size={11} color="#fff" />
+              {isAvatarSaving ? <ActivityIndicator size="small" color="#fff" /> : <Ionicons name="pencil" size={11} color="#fff" />}
             </View>
           </View>
           <ThemedText style={[styles.name, { color: colors.oppositeColor }]}>
@@ -173,7 +190,6 @@ const styles = StyleSheet.create({
 
   identity: { alignItems: 'center', marginTop: 8, marginBottom: 22 },
   avatarWrap: { width: 84, height: 84, marginBottom: 10 },
-  avatar: { width: 84, height: 84, borderRadius: 42 },
   editBadge: {
     position: 'absolute', right: -2, bottom: -2,
     width: 26, height: 26, borderRadius: 13,

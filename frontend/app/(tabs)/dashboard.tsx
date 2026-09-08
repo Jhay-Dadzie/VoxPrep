@@ -1,4 +1,4 @@
-import { StyleSheet, View, ScrollView, Image, Pressable, ActivityIndicator } from 'react-native'
+import { StyleSheet, View, ScrollView, Pressable, ActivityIndicator } from 'react-native'
 import React from 'react'
 import { LinearGradient } from 'expo-linear-gradient'
 import { Ionicons } from '@expo/vector-icons'
@@ -11,8 +11,7 @@ import { useAuth } from '@/hooks/auth-context'
 import { useRecentSessions } from '@/hooks/use-history'
 import { HistorySummary } from '@/types/history'
 import { formatDuration, formatRelative, formatScore, scoreBand } from '@/lib/format'
-
-const AVATAR = 'https://i.pravatar.cc/100?img=12'
+import { ProfileAvatar } from '@/components/profile-avatar'
 
 /** Recent sessions shown inline; the rest live behind "View All". */
 const DASHBOARD_SESSION_COUNT = 7
@@ -27,7 +26,9 @@ export default function Dashboard() {
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.card }} edges={['top']}>
       <View style={[styles.header, { backgroundColor: colors.card, borderBottomColor: colors.border }]}>
-        <Image source={{ uri: AVATAR }} style={styles.avatar} />
+        <View style={{ marginRight: 10 }}>
+          <ProfileAvatar user={user} size={36} colors={colors} onPress={() => router.push('/(tabs)/profile')} />
+        </View>
         <ThemedText style={[styles.brand, { color: colors.tint }]}>VoxPrep</ThemedText>
         <View style={{ flex: 1 }} />
         <Pressable hitSlop={10}>
@@ -238,7 +239,6 @@ function SessionRow({
 
 const styles = StyleSheet.create({
   header: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20, paddingVertical: 12, borderBottomWidth: 1 },
-  avatar: { width: 36, height: 36, borderRadius: 18, marginRight: 10 },
   backBtn: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center', marginRight: 10 },
   brand: { fontWeight: '700', fontSize: 17 },
 
