@@ -145,10 +145,10 @@ export default function Signup() {
               <Ionicons name='logo-google' size={18} color={colors.oppositeColor} />
               <ThemedText style={[styles.socialText, { color: colors.oppositeColor }]}>Google</ThemedText>
             </Pressable>
-            <Pressable style={[styles.socialBtn, { borderColor: colors.border }]}>
+            {/* <Pressable style={[styles.socialBtn, { borderColor: colors.border }]}>
               <Ionicons name='logo-apple' size={18} color={colors.oppositeColor} />
               <ThemedText style={[styles.socialText, { color: colors.oppositeColor }]}>Apple</ThemedText>
-            </Pressable>
+            </Pressable> */}
           </View>
 
           <View style={styles.bottom}>

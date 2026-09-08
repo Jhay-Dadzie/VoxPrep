@@ -118,10 +118,12 @@ export default function Signin() {
               disabled={isLoading}
             >
               <Ionicons name='logo-google' size={20} color={colors.oppositeColor} />
+              <ThemedText style={[{ color: colors.oppositeColor, fontWeight: 600 }]}>Google</ThemedText>
             </Pressable>
-            <Pressable style={[styles.socialBtn, { borderColor: colors.border }]}>
+            {/* <Pressable style={[styles.socialBtn, { borderColor: colors.border }]}>
               <Ionicons name='logo-apple' size={20} color={colors.oppositeColor} />
-            </Pressable>
+              <ThemedText style={[{ color: colors.oppositeColor, fontWeight: 600 }]}>Apple</ThemedText>
+            </Pressable> */}
           </View>
 
           <View style={styles.bottom}>
@@ -143,6 +145,16 @@ const styles = StyleSheet.create({
   line: { flex: 1, height: 1 },
   dividerText: { fontSize: 11, marginHorizontal: 8, letterSpacing: 1 },
   social: { flexDirection: 'row', justifyContent: 'space-between', gap: 10 },
-  socialBtn: { flex: 1, height: 48, borderRadius: 12, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
+  socialBtn: { 
+    flex: 1,
+    height: 48,
+    borderRadius: 12, 
+    borderWidth: 1,
+    alignItems: 'center', 
+    justifyContent: 'center',
+    display: "flex", 
+    flexDirection: "row",
+    gap: 5
+   },
   bottom: { flexDirection: 'row', justifyContent: 'center', marginTop: 20 },
 })
