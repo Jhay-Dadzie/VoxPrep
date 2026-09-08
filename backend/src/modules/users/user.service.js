@@ -31,7 +31,7 @@ const TABLE = 'users';
  * We never select * — audit/internal columns stay server-side.
  */
 const PUBLIC_COLUMNS =
-  'id, email, full_name, is_active, profile_completed, last_login, created_at, updated_at';
+  'id, email, full_name, avatar_url, avatar_updated_at, is_active, profile_completed, last_login, created_at, updated_at';
 
 // ─── Service class ────────────────────────────────────────────────────────────
 
@@ -70,12 +70,12 @@ class UserService {
   // ── Writes ─────────────────────────────────────────────────────────────────
 
   /**
-   * Update mutable profile fields (full_name for now; extendable).
+   * Update mutable profile fields such as full_name and avatar_url.
    * The UPDATE is scoped by RLS — the user can only update their own row.
    *
    * @param {string} userId
    * @param {string} accessToken
-   * @param {{ full_name?: string }} fields  - Already validated, strip-unknown applied
+   * @param {{ full_name?: string, avatar_url?: string }} fields  - Already validated, strip-unknown applied
    * @returns {Promise<object>}  - Updated row
    */
   async updateProfile(userId, accessToken, fields) {

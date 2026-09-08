@@ -55,12 +55,6 @@ function validateOAuthRedirectUri(redirectUri) {
   return redirectUri;
 }
 
-function generateRandomAvatarUrl(email, fullName) {
-  const name = encodeURIComponent(fullName || email.split('@')[0] || 'user');
-  // UI Avatars – free, consistent, no API key
-  return `https://ui-avatars.com/api/?name=${name}&background=random&size=128&bold=true`;
-}
-
 const EXISTING_ACCOUNT_SIGNUP_MESSAGE =
   'An account with this email already exists. Please sign in instead.';
 const GOOGLE_ACCOUNT_SIGNUP_MESSAGE =
@@ -148,7 +142,7 @@ class AuthService {
   async signup({ email, password, full_name, avatar_url }) {
     try {
       if (shouldUseTestAuth()) {
-        const result = signupTestUser({ email, password, full_name });
+        const result = signupTestUser({ email, password, full_name, avatar_url });
         if (result.session) {
           info(`User profile created for ${email}`);
         } else {
@@ -244,8 +238,7 @@ class AuthService {
 
       // Email confirmation disabled – create profile and return session
       try {
-        const avatarUrl = avatar_url || generateRandomAvatarUrl(email, full_name);
-        await initializeUserProfile(user.id, email, full_name, session.access_token, avatarUrl);
+        await initializeUserProfile(user.id, email, full_name, session.access_token, avatar_url || null);
         info(`User profile created for ${email}`);
       } catch (profileError) {
         _error(`Failed to create user profile for ${email}:`, profileError);
@@ -263,7 +256,7 @@ class AuthService {
           id: user.id,
           email: user.email,
           full_name,
-          avatar_url: avatar_url || generateRandomAvatarUrl(email, full_name),
+          avatar_url: avatar_url || null,
           is_active: true,
           profile_completed: false,
           created_at: user.created_at || new Date().toISOString(),
@@ -483,10 +476,9 @@ class AuthService {
     const { data, error } = await supabase.auth.verifyOtp(verificationRequest);
     if (error) throw new Error(error.message);
 
-    // If email confirmation is enabled, create profile now with an avatar
+    // If email confirmation is enabled, create the profile now
     // (only if not already created by some other flow)
       const { user } = data;
-      const avatarUrl = generateRandomAvatarUrl(user.email, user.user_metadata?.full_name);
       try {
       // Use admin client because the user may not have an active session
       const adminClient = getSupabaseAdminClient();
@@ -497,7 +489,7 @@ class AuthService {
         .eq('id', user.id)
         .maybeSingle();
       if (!existing) {
-        await initializeUserProfile(user.id, user.email, user.user_metadata?.full_name, null, avatarUrl);
+        await initializeUserProfile(user.id, user.email, user.user_metadata?.full_name, null, null);
       }
     } catch (err) {
       warn('Failed to create user profile after email verification:', err);

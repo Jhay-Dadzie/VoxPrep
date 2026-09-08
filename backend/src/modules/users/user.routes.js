@@ -8,7 +8,7 @@
  *
  * Endpoints:
  *   GET    /users/me                  — Fetch own profile
- *   PATCH  /users/me                  — Update profile fields (full_name)
+ *   PATCH  /users/me                  — Update profile fields (full_name, avatar_url)
  *   PATCH  /users/me/status           — Toggle is_active flag
  *   PATCH  /users/me/complete-profile — Mark profile as completed
  *   DELETE /users/me                  — Permanently delete account
@@ -39,7 +39,7 @@ router.get('/me', asyncHandler(userController.getProfile.bind(userController)));
 /**
  * PATCH /api/v1/users/me
  * Partially updates mutable profile fields.
- * Body: { full_name?: string }
+ * Body: { full_name?: string, avatar_url?: string }
  * Headers: Authorization: Bearer <access_token>
  */
 router.patch('/me', asyncHandler(userController.updateProfile.bind(userController)));

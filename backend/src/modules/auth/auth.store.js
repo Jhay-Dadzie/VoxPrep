@@ -10,11 +10,6 @@ const sessionsByRefreshToken = new Map();
 const verificationTokensByValue = new Map();
 const passwordResetTokensByValue = new Map();
 
-function generateTestAvatar(email) {
-  const name = encodeURIComponent(email.split('@')[0]);
-  return `https://ui-avatars.com/api/?name=${name}&background=random&size=128&bold=true`;
-}
-
 function createSession(userId) {
   const access_token = `test-access.${randomUUID()}`;
   const refresh_token = `test-refresh.${randomUUID()}`;
@@ -49,14 +44,13 @@ export function shouldUseTestAuth() {
   return isTestMode;
 }
 
-export function signupTestUser({ email, password, full_name }) {
+export function signupTestUser({ email, password, full_name, avatar_url }) {
   const normalizedEmail = email.toLowerCase();
 
   if (usersByEmail.has(normalizedEmail)) {
     throw new Error('User already registered');
   }
 
-  const avatarUrl = generateTestAvatar(normalizedEmail);
   const now = new Date().toISOString();
 
   const user = {
@@ -64,8 +58,8 @@ export function signupTestUser({ email, password, full_name }) {
     email: normalizedEmail,
     password,
     full_name: full_name || null,
-    avatar_url: avatarUrl,
-    avatar_updated_at: !isEmailConfirmationEnabled ? now : null,
+    avatar_url: avatar_url || null,
+    avatar_updated_at: avatar_url && !isEmailConfirmationEnabled ? now : null,
     email_confirmed: !isEmailConfirmationEnabled,
     created_at: now,
     updated_at: now,
