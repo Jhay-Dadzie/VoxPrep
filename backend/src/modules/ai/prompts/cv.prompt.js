@@ -44,6 +44,8 @@ WHAT YOU SHOULD DO:
 - Rewrite the professional summary so it speaks directly to this role, using only the candidate's actual background.
 - Prefer strong, specific verbs and keep bullets to one or two lines each.
 - Surface skills the candidate already has that the CV buried but this job asks for.
+- Limit each role to a maximum of 4-5 bullets. If a role has more, keep only the ones most relevant to the job's description.
+- Keep all certifications and education entries, but if they are irrelevant to the job, move them to the bottom of their respective sections.
 
 OUTPUT:
 Return a single JSON object with this shape:
