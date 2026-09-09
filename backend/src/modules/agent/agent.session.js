@@ -88,7 +88,15 @@ export class AgentSession {
     this.upstream = null;
     this.pairer = new TranscriptPairer();
     this.askedCount = 0;
+    this.audioFramesReceived = 0;
+    this.lastAudioAt = null;
     this.closing = false;
+    this.closeReason = null;
+    this.failureDetail = null;
+    /** True while audio for the current interviewer turn is still in flight. */
+    this.agentAudioActive = false;
+    /** True once the sign-off has been sent to the upstream agent. */
+    this.closingMessagesSent = false;
     /** Set once the sign-off has actually been spoken — see onUpstreamMessage. */
     this.closingSpoken = false;
     this.finished = false;
@@ -104,6 +112,7 @@ export class AgentSession {
 
     this.idleTimer = null;
     this.maxTimer = null;
+    this.closingTimer = null;
   }
 
   // ── Lifecycle ─────────────────────────────────────────────────────────────
@@ -121,7 +130,10 @@ export class AgentSession {
     this.upstream.on('message', (data, isBinary) => this.onUpstreamMessage(data, isBinary));
     this.upstream.on('error', (err) => {
       logError('Voice agent upstream error:', err);
-      this.failClient('The interviewer connection dropped. Your answers so far are saved.');
+      this.failClient(
+        'The interviewer connection dropped. Your answers so far are saved.',
+        err?.message || 'upstream websocket error'
+      );
     });
     this.upstream.on('close', () => this.finish('upstream_closed'));
 
@@ -161,13 +173,21 @@ export class AgentSession {
       // The candidate tapped End. Close through the agent so they hear a
       // sign-off rather than the call simply vanishing.
       if (msg.type === 'end') this.beginClosing('ended_early');
+      else if (msg.type === 'keepalive') this.sendUpstreamKeepAlive();
       return;
     }
 
     this.resetIdleTimer();
+    this.audioFramesReceived += 1;
+    this.lastAudioAt = Date.now();
     if (this.upstream?.readyState === WebSocket.OPEN && !this.closing) {
       this.upstream.send(data, { binary: true });
     }
+  }
+
+  sendUpstreamKeepAlive() {
+    if (this.finished || this.closing || this.upstream?.readyState !== WebSocket.OPEN) return;
+    this.upstream.send(JSON.stringify({ type: 'KeepAlive' }));
   }
 
   // ── Deepgram → phone ──────────────────────────────────────────────────────
@@ -176,6 +196,7 @@ export class AgentSession {
     if (isBinary) {
       // The agent's voice. Straight through — every millisecond spent here is
       // heard as a gap in the middle of a sentence.
+      this.agentAudioActive = true;
       this.sendAudio(data);
       return;
     }
@@ -207,6 +228,7 @@ export class AgentSession {
         break;
 
       case 'AgentAudioDone':
+        this.agentAudioActive = false;
         this.sendEvent({ type: 'agent_done' });
         // Hang up only once the sign-off itself has finished playing.
         //
@@ -217,12 +239,23 @@ export class AgentSession {
         // synthesised, and ending on it cut the sign-off off entirely — the
         // call simply stopped after a question nobody was going to answer.
         if (this.closing && this.closingSpoken) this.finish('closed');
+        else if (this.closing) this.sendClosingMessages();
         else this.advanceSpeaker();
         break;
 
       case 'Error':
-        warn(`Voice agent error: ${msg.description || msg.message || 'unknown'}`);
-        this.failClient('The interviewer ran into a problem. Your answers so far are saved.');
+        {
+          const detail = msg.description || msg.message || 'unknown provider error';
+          const audioState = this.lastAudioAt
+            ? `${this.audioFramesReceived} client audio frame(s), last ${Date.now() - this.lastAudioAt}ms ago`
+            : 'no client audio frames received';
+          const failureDetail = `${detail} (${audioState})`;
+          warn(`Voice agent error: ${failureDetail}`);
+          this.failClient(
+            'The interviewer ran into a problem. Your answers so far are saved.',
+            failureDetail
+          );
+        }
         break;
 
       default:
@@ -237,6 +270,11 @@ export class AgentSession {
    * Both halves are written together so the pair can never come apart.
    */
   onConversationText(role, content) {
+    // ConversationText can arrive just before the first audio frame. Mark the
+    // turn active here as well as when binary audio arrives, so a close request
+    // cannot inject a farewell between the question text and its audio.
+    if (role === 'assistant') this.agentAudioActive = true;
+
     this.sendEvent({ type: 'transcript', role, content });
 
     // Once the interview is closing, the only interviewer turn left is the
@@ -249,7 +287,10 @@ export class AgentSession {
     // it becomes an extra question the grader is then asked to score, which it
     // can only do badly.
     if (this.closing) {
-      if (role === 'assistant') this.closingSpoken = true;
+      // A question that was already in flight when End was tapped is still an
+      // assistant turn, but it is not the sign-off. Only mark the farewell once
+      // the closing messages have actually been injected.
+      if (role === 'assistant' && this.closingMessagesSent) this.closingSpoken = true;
       return;
     }
 
@@ -363,36 +404,56 @@ export class AgentSession {
   beginClosing(reason) {
     if (this.closing || this.finished) return;
     this.closing = true;
+    this.closeReason = reason;
 
     info(`Voice interview ${this.sessionId} closing (${reason})`);
     this.sendEvent({ type: 'closing', reason });
 
     if (this.upstream?.readyState === WebSocket.OPEN) {
-      // The chair closes an interview, whoever asked the last question. Only
-      // the voice is changed — the closing messages carry their own prompt.
-      const chair = this.panel[0];
-      if (chair && this.speakerIndex !== 0) {
-        this.speakerIndex = 0;
-        this.upstream.send(
-          JSON.stringify({
-            type: 'UpdateSpeak',
-            speak: { provider: { type: 'deepgram', model: chair.model } },
-          })
-        );
-        this.announceSpeaker();
-      }
+      // If the interviewer is already speaking, wait for its audio to drain.
+      // Injecting now makes Deepgram interrupt the question, which can leave
+      // both the question and the eventual farewell truncated.
+      if (!this.agentAudioActive) this.sendClosingMessages();
 
-      for (const message of buildClosingMessages(closingRemarkFor(reason))) {
-        this.upstream.send(JSON.stringify(message));
-      }
-      // Backstop: if the sign-off never plays — the injection is refused, or
-      // its audio never arrives — the interview still ends rather than hanging
-      // on a `closingSpoken` that will never be set.
-      setTimeout(() => this.finish('closing_timeout'), 15_000);
+      // Backstop: if the current turn or sign-off never completes, the
+      // interview still ends rather than hanging forever.
+      this.closingTimer = setTimeout(() => this.finish('closing_timeout'), 15_000);
       return;
     }
 
     this.finish(reason);
+  }
+
+  /** Send the sign-off only when the previous interviewer turn is finished. */
+  sendClosingMessages() {
+    if (
+      !this.closing ||
+      this.closingMessagesSent ||
+      this.finished ||
+      this.upstream?.readyState !== WebSocket.OPEN
+    ) {
+      return;
+    }
+
+    this.closingMessagesSent = true;
+
+    // The chair closes an interview, whoever asked the last question. Only
+    // the voice is changed — the closing messages carry their own prompt.
+    const chair = this.panel[0];
+    if (chair && this.speakerIndex !== 0) {
+      this.speakerIndex = 0;
+      this.upstream.send(
+        JSON.stringify({
+          type: 'UpdateSpeak',
+          speak: { provider: { type: 'deepgram', model: chair.model } },
+        })
+      );
+      this.announceSpeaker();
+    }
+
+    for (const message of buildClosingMessages(closingRemarkFor(this.closeReason))) {
+      this.upstream.send(JSON.stringify(message));
+    }
   }
 
   async finish(reason) {
@@ -401,6 +462,7 @@ export class AgentSession {
 
     clearTimeout(this.idleTimer);
     clearTimeout(this.maxTimer);
+    clearTimeout(this.closingTimer);
 
     // Anything the candidate said after the last question still counts.
     const trailing = this.pairer.flush();
@@ -431,7 +493,10 @@ export class AgentSession {
       warn(`Could not complete session ${this.sessionId}: ${err.message}`);
     }
 
-    info(`Voice interview ${this.sessionId} finished (${reason}) with ${this.askedCount} exchanges`);
+    const failure = reason === 'error' && this.failureDetail
+      ? `: ${String(this.failureDetail).slice(0, 500)}`
+      : '';
+    info(`Voice interview ${this.sessionId} finished (${reason}${failure}) with ${this.askedCount} exchanges`);
     this.sendEvent({ type: 'done', reason, asked: this.askedCount });
 
     try {
@@ -458,7 +523,8 @@ export class AgentSession {
     this.client.send(chunk, { binary: true });
   }
 
-  failClient(message) {
+  failClient(message, detail = message) {
+    this.failureDetail = detail;
     this.sendEvent({ type: 'error', message });
     this.finish('error');
   }

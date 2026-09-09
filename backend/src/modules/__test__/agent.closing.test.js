@@ -58,10 +58,13 @@ const upstreamEvent = (session, payload) =>
 /** Two full exchanges against a cap of two — enough to trigger the close. */
 const runToCap = (session) => {
   say(session, 'assistant', 'Question one?');
+  upstreamEvent(session, { type: 'AgentAudioDone' });
   say(session, 'user', 'Answer one.');
   say(session, 'assistant', 'Question two?'); // completes exchange 1
+  upstreamEvent(session, { type: 'AgentAudioDone' });
   say(session, 'user', 'Answer two.');
   say(session, 'assistant', 'Question three?'); // completes exchange 2 -> cap reached
+  upstreamEvent(session, { type: 'AgentAudioDone' });
 };
 
 beforeEach(() => {
@@ -77,6 +80,40 @@ afterEach(() => {
 });
 
 describe('ending a voice interview', () => {
+  it('waits for an in-progress question before injecting the sign-off', () => {
+    const { session, upstream } = buildSession(15);
+
+    say(session, 'assistant', 'Please tell me about your experience.');
+    session.beginClosing('ended_early');
+
+    expect(upstream.send).not.toHaveBeenCalled();
+
+    upstreamEvent(session, { type: 'AgentAudioDone' });
+
+    expect(upstreamMessages(upstream).map((message) => message.type)).toEqual([
+      'UpdatePrompt',
+      'InjectAgentMessage',
+    ]);
+  });
+
+  it('does not mistake the in-progress question for the sign-off', () => {
+    const { session, upstream } = buildSession(15);
+
+    say(session, 'assistant', 'Please tell me about your experience.');
+    session.beginClosing('ended_early');
+    say(session, 'assistant', 'Could you give me a specific example?');
+
+    expect(session.closingSpoken).toBe(false);
+
+    upstreamEvent(session, { type: 'AgentAudioDone' });
+
+    expect(session.closingMessagesSent).toBe(true);
+    expect(upstreamMessages(upstream).map((message) => message.type)).toEqual([
+      'UpdatePrompt',
+      'InjectAgentMessage',
+    ]);
+  });
+
   it('asks the interviewer to sign off once the question cap is reached', () => {
     const { session, upstream } = buildSession(2);
 
@@ -169,10 +206,12 @@ describe('ending a voice interview', () => {
     // They tap End before the interviewer speaks again, so this exchange has
     // never been closed off by a role change.
     session.beginClosing('ended_early');
+    // The current question must finish before the sign-off is injected.
+    upstreamEvent(session, { type: 'AgentAudioDone' });
     upstreamEvent(session, {
       type: 'ConversationText',
       role: 'assistant',
-      content: "Of course, let's wrap up there.",
+      content: "That's everything I wanted to cover.",
     });
     upstreamEvent(session, { type: 'AgentAudioDone' });
     await session.writeQueue;

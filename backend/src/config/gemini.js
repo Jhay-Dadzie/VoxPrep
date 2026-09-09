@@ -56,12 +56,12 @@ const modelList = (value, fallback) =>
  */
 export const GEMINI_MODEL_FALLBACKS = modelList(
   process.env.GEMINI_MODEL_FALLBACKS,
-  ["gemini-2.5-flash", "gemini-3.5-flash"]
+  ["gemini-3.5-flash"]
 );
 
 export const GEMINI_ASSESSMENT_FALLBACKS = modelList(
   process.env.GEMINI_ASSESSMENT_FALLBACKS,
-  ["gemini-3.5-flash", "gemini-3.6-flash"]
+  ["gemini-3.5-flash"]
 );
 
 /** Speech generation. Only the *-tts models accept responseModalities: ["AUDIO"]. */
@@ -72,7 +72,7 @@ export const GEMINI_TTS_MODEL = process.env.GEMINI_TTS_MODEL || "gemini-3.1-flas
  * 15-question session does not spend the quota the assessment needs, and so a
  * rate-limited interviewer never blocks results the user is waiting on.
  */
-export const GEMINI_ASSESSMENT_MODEL = process.env.GEMINI_ASSESSMENT_MODEL || "gemini-2.5-flash";
+export const GEMINI_ASSESSMENT_MODEL = process.env.GEMINI_ASSESSMENT_MODEL || "gemini-3.6-flash";
 
 /**
  * CV tailoring. Runs once, after the interview is already over, on a much
@@ -84,7 +84,7 @@ export const GEMINI_CV_MODEL = process.env.GEMINI_CV_MODEL || "gemini-3.5-flash"
 
 export const GEMINI_CV_FALLBACKS = modelList(
   process.env.GEMINI_CV_FALLBACKS,
-  ["gemini-2.5-flash", "gemini-3.6-flash"]
+  ["gemini-3.6-flash", "gemini-3.5-flash"]
 );
 
 export const GEMINI_API_KEY = process.env.GEMINI_API_KEY;

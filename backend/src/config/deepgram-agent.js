@@ -25,27 +25,13 @@ export const AGENT_LISTEN_MODEL = process.env.DEEPGRAM_AGENT_LISTEN_MODEL || 'no
  * while a *separate* Gemini call grades the finished session — the two never
  * contend for the same quota inside one interview.
  *
- * ── Do not raise this to a Gemini 3.x id ────────────────────────────────────
- *
- * Deepgram keeps its own allowlist of `think` models, and it is far behind
- * Google's catalogue. Probed against this account:
- *
- *   gemini-2.5-flash        ✓ accepted
- *   gemini-2.5-flash-lite   ✓ accepted
- *   gemini-3.7-flash        ✗ "model not available"
- *   gemini-3.6-flash        ✗ "model not available"
- *   gemini-3-flash          ✗ "model not available"
- *   gemini-2.0-flash        ✗ "model not available"
- *   gemini-flash-latest     ✗ "model not available"
- *
- * An id off that list is rejected when Settings is applied, which surfaces as
- * an interviewer that simply never speaks — there is no partial failure to
- * notice. This constrains the *agent* only: the grader calls Google directly
- * and is free to use a newer model. Re-probe before changing this, and use the
- * env override to try a new id without a deploy.
+ * Deepgram maintains its own supported model list. The current Voice Agent
+ * configuration uses Gemini 3.5 Flash; keep this separate from the direct
+ * Gemini model used for grading, and override it through the environment when
+ * Deepgram changes its provider catalogue.
  */
 export const AGENT_THINK_PROVIDER = process.env.DEEPGRAM_AGENT_THINK_PROVIDER || 'google';
-export const AGENT_THINK_MODEL = process.env.DEEPGRAM_AGENT_THINK_MODEL || 'gemini-2.5-flash';
+export const AGENT_THINK_MODEL = process.env.DEEPGRAM_AGENT_THINK_MODEL || 'gemini-3.5-flash';
 
 /** Speech half. Voice is chosen per interviewer; this is the fallback. */
 export const AGENT_SPEAK_MODEL = process.env.DEEPGRAM_AGENT_SPEAK_MODEL || 'aura-2-thalia-en';

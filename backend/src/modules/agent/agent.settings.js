@@ -102,19 +102,16 @@ export const buildSpeakerMessages = (panel, speakerIndex, prompt) => {
  * event as running out of questions, and one line covering both sounds wrong
  * for at least one of them.
  *
- * The cap line opens by conceding the turn ("that's everything I wanted to
- * cover") because it is usually spoken right after the interviewer has already
- * started asking one more question — the last exchange is only recognised as
- * complete when the interviewer speaks again. Bridging is what makes that land
- * as a decision rather than an interruption.
+ * The normal cap and manual-end paths share one line so the candidate gets the
+ * same clear hand-off regardless of how the interview was closed.
  */
+const STANDARD_CLOSING_REMARK =
+  "That's everything I wanted to cover. Thank you for your time today — " +
+  "you'll see your feedback in just a moment.";
+
 const CLOSING_REMARKS = {
-  limit:
-    "Actually, that's everything I wanted to cover, so let's leave it there. " +
-    "Thank you for walking me through all of that today — you'll see your feedback in just a moment.",
-  ended_early:
-    "Of course, let's wrap up there. Thank you for your time today — " +
-    "you'll see your feedback on what we covered in just a moment.",
+  limit: STANDARD_CLOSING_REMARK,
+  ended_early: STANDARD_CLOSING_REMARK,
   idle:
     "That feels like a natural place to finish. Thank you for your time today — " +
     "you'll see your feedback in just a moment.",
