@@ -178,9 +178,19 @@ export function useAgentSession({
           setPhase('closing')
           break
 
-        case 'done':
-          gradeAndLeave()
+        case 'done': {
+          // The server sends `done` after it has finished sending the
+          // farewell, while the phone may still have that farewell queued for
+          // playback. Wait before grading/navigation so the session cannot
+          // unmount and stop the audio queue mid-parting message.
+          const playback = connection.current?.waitForPlayback() ?? Promise.resolve()
+          const finishAfterPlayback = () => {
+            connection.current?.stop()
+            return gradeAndLeave()
+          }
+          void playback.then(finishAfterPlayback).catch(finishAfterPlayback)
           break
+        }
 
         case 'error':
           setError(event.message)

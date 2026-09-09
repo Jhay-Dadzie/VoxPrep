@@ -119,7 +119,7 @@ export default function Dashboard() {
               />
             </View>
 
-            <View style={[styles.nextCard, { backgroundColor: colors.card }]}>
+            {/* <View style={[styles.nextCard, { backgroundColor: colors.card }]}>
               <View style={[styles.nextIcon, { backgroundColor: colors.brandSoft }]}>
                 <Ionicons name="calendar" size={18} color={colors.tint} />
               </View>
@@ -128,7 +128,7 @@ export default function Dashboard() {
                 <ThemedText style={{ color: colors.oppositeColor, fontWeight: '600', marginTop: 2 }}>Oct 12 • Google</ThemedText>
               </View>
               <Ionicons name="chevron-forward" size={18} color={colors.muted} />
-            </View>
+            </View> */}
 
             <View style={styles.sectionHead}>
               <ThemedText style={[styles.sectionTitle, { color: colors.oppositeColor }]}>Recent Sessions</ThemedText>
@@ -148,13 +148,18 @@ export default function Dashboard() {
               />
             ))}
 
-            <View style={[styles.insights, { backgroundColor: '#0B1220' }]}>
-              <ThemedText style={styles.insightsTag}>AI INSIGHTS</ThemedText>
-              <ThemedText style={styles.insightsBody}>
-                &quot;You&apos;ve shown 15% improvement in technical articulation this week. Keep focusing on STAR method examples.&quot;
-              </ThemedText>
-              <Ionicons name="sparkles" size={48} color="#ffffff20" style={styles.insightsSparkle} />
-            </View>
+            {
+              hasHistory ? (
+                <View style={[styles.insights, { backgroundColor: '#0B1220' }]}>
+                  <ThemedText style={styles.insightsTag}>AI INSIGHTS</ThemedText>
+                  <ThemedText style={styles.insightsBody}>
+                    &quot;You&apos;ve shown 15% improvement in technical articulation this week. Consistency is the key.&quot;
+                  </ThemedText>
+                  <Ionicons name="sparkles" size={48} color="#ffffff20" style={styles.insightsSparkle} />
+                </View>
+              ) : null
+            }
+
           </>
         )}
       </ScrollView>

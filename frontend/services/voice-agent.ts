@@ -141,9 +141,12 @@ export class VoiceAgentConnection {
 
   private readonly options: AgentConnectionOptions
   private closed = false
-  /** Becomes true only after the gateway has received the authenticated start message. */
+  /** The server has completed normally; let the farewell audio drain. */
+  private gracefulClosing = false
+  /** Becomes true only after the gateway and upstream agent are ready. */
   private serverStarted = false
   private micOpen = false
+  private keepAliveTimer: ReturnType<typeof setInterval> | null = null
 
   /**
    * When the interviewer's queued audio is expected to have finished playing.
@@ -205,6 +208,8 @@ export class VoiceAgentConnection {
     this.serverStarted = false
 
     if (this.drainTimer) clearTimeout(this.drainTimer)
+    if (this.keepAliveTimer) clearInterval(this.keepAliveTimer)
+    this.keepAliveTimer = null
 
     try {
       this.recorder?.clearOnAudioReady()
@@ -227,6 +232,20 @@ export class VoiceAgentConnection {
     }
 
     this.audioApi?.AudioManager.setAudioSessionActivity(false).catch(() => {})
+  }
+
+  /**
+   * Wait until audio already sent by the interviewer has finished playing on
+   * the device. The server's `done` event means it has finished sending, not
+   * that the phone's playback queue has drained.
+   */
+  waitForPlayback(): Promise<void> {
+    const remaining = Math.max(0, this.agentAudioUntil - Date.now()) + ECHO_TAIL_MS
+    if (remaining <= ECHO_TAIL_MS && !this.agentSpeaking) return Promise.resolve()
+
+    return new Promise((resolve) => {
+      setTimeout(resolve, remaining)
+    })
   }
 
   // ── Audio session ─────────────────────────────────────────────────────────
@@ -281,19 +300,34 @@ export class VoiceAgentConnection {
           panel_size: this.options.panelSize ?? this.options.panel?.length,
           max_questions: this.options.maxQuestions,
         })
-        this.serverStarted = true
         resolve()
       }
 
       socket.onmessage = (event) => this.onMessage(event)
 
       socket.onerror = () => {
+        if (this.closed || this.gracefulClosing) return
         failed('Could not reach the interviewer. Check your connection.')
         this.options.onEvent({ type: 'error', message: 'The connection to the interviewer dropped.' })
       }
 
       socket.onclose = (event) => {
         if (this.closed) return
+        if (this.gracefulClosing) {
+          // The server closes its side immediately after sending `done`. Keep
+          // the playback context alive, but release the microphone while the
+          // already-buffered farewell finishes.
+          this.serverStarted = false
+          if (this.keepAliveTimer) clearInterval(this.keepAliveTimer)
+          this.keepAliveTimer = null
+          try {
+            this.recorder?.clearOnAudioReady()
+            this.recorder?.stop()
+          } catch {
+            /* already stopped */
+          }
+          return
+        }
         // Application close codes carry a usable reason; a bare 1006 does not.
         if (event.code >= 4000 && event.reason) {
           this.options.onEvent({ type: 'error', message: event.reason })
@@ -329,7 +363,35 @@ export class VoiceAgentConnection {
       this.setAgentSpeaking(false)
     }
 
+    if (message.type === 'ready') {
+      // Do not forward microphone frames while the gateway is still awaiting
+      // auth/session loading. The gateway attaches AgentSession only after
+      // that async work completes, so earlier frames can be discarded.
+      this.serverStarted = true
+      this.startKeepAlive()
+    }
+
+    if (message.type === 'done') this.gracefulClosing = true
+
     this.options.onEvent(message)
+  }
+
+  /** Keep a quiet candidate turn alive while Deepgram waits for speech. */
+  private startKeepAlive() {
+    if (this.keepAliveTimer) clearInterval(this.keepAliveTimer)
+
+    this.keepAliveTimer = setInterval(() => {
+      if (
+        this.closed ||
+        this.gracefulClosing ||
+        !this.serverStarted ||
+        this.socket?.readyState !== WebSocket.OPEN
+      ) {
+        return
+      }
+
+      this.send({ type: 'keepalive' })
+    }, 7000)
   }
 
   // ── Playback ──────────────────────────────────────────────────────────────
