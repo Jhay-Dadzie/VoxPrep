@@ -1,0 +1,9 @@
+flowchart LR
+    A["Select slice<br/>(highest risk first)"] --> B["Analyse<br/>requirements + constraints"]
+    B --> C["Design<br/>module boundaries, contracts"]
+    C --> D["Implement<br/>backend + client together"]
+    D --> E["Test<br/>automated suite extended"]
+    E --> F["Document<br/>ADR if a position was taken"]
+    F --> G{"Assumption<br/>invalidated?"}
+    G -->|Yes| B
+    G -->|No| A

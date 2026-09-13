@@ -1,0 +1,26 @@
+flowchart TB
+    A{"Trigger"} -->|question cap reached| B["beginClosing('completed')"]
+    A -->|idle 120 s| B2["beginClosing('idle')"]
+    A -->|30 min elapsed| B3["beginClosing('time_limit')"]
+    A -->|candidate stops| B4["beginClosing('user')"]
+
+    B --> C["emit { type: 'closing', reason }"]
+    B2 --> C
+    B3 --> C
+    B4 --> C
+
+    C --> D{"Is the chair<br/>holding the floor?"}
+    D -->|No| E["Return the floor to the chair<br/>update speak voice · announce"]
+    D -->|Yes| F
+    E --> F["Inject closing remark"]
+    F --> G{"Sign-off spoken?"}
+    G -->|Yes| H["finish(reason)"]
+    G -->|"No — 15 s backstop"| H
+
+    H --> I["Cancel idle and session timers"]
+    I --> J["Flush the pairer — trailing speech still counts"]
+    J --> K["Close upstream"]
+    K --> L["<b>Await the write queue</b>"]
+    L --> M["Mark session complete"]
+    M --> N["emit { type: 'done', asked }"]
+    N --> O["Close client socket"]

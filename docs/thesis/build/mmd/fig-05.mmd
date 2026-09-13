@@ -1,0 +1,9 @@
+flowchart LR
+    Req["HTTP request"] --> Routes
+    Routes["<b>routes.js</b><br/>surface · middleware · ordering"] --> Controller
+    Controller["<b>controller.js</b><br/>validate · status codes<br/>error translation"] --> Validation
+    Validation["<b>validation.js</b><br/>schemas"] -.-> Controller
+    Controller --> Service
+    Service["<b>service.js</b><br/>domain logic · persistence<br/>ownership filters"] --> DB[("Database")]
+    Service --> Mapper
+    Mapper["<b>mapper.js</b><br/>rows → wire shapes"] --> Res["HTTP response"]

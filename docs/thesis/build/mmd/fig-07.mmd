@@ -1,0 +1,24 @@
+flowchart TB
+    Root["Root layout<br/>theme · auth · mode · interviewer providers"]
+    Root --> Onb["Onboarding"]
+    Root --> AuthG["(auth) — sign in · sign up · verify · forgot · reset"]
+    Root --> Tabs["(tabs)"]
+    Root --> Flow["Session flow"]
+    Root --> Set["Settings"]
+
+    Tabs --> Dash["Dashboard<br/>progress · recent sessions"]
+    Tabs --> Prac["Practice<br/>mode · material · panel"]
+    Tabs --> Res["Results"]
+    Tabs --> Prof["Profile"]
+
+    Flow --> Ready["Questions ready"]
+    Flow --> Count["Countdown"]
+    Flow --> Live["Interview session<br/>live voice"]
+    Flow --> ExamS["Exam session"]
+    Flow --> ExamR["Exam results"]
+    Flow --> Hist["History → session detail"]
+    Flow --> CVT["CV tailoring"]
+
+    Set --> PI["Personal info"]
+    Set --> CP["Change password"]
+    Set --> Not["Notifications"]

@@ -1,0 +1,43 @@
+flowchart TB
+    subgraph Entry["Entry"]
+        Server["server.js<br/>startup · shutdown · gateway attachment"]
+        AppJs["app.js<br/>middleware · routing · error handler"]
+    end
+
+    subgraph Core["core/"]
+        Errors["errors/<br/>AppError hierarchy · logger"]
+        MW["middleware/<br/>validate · upload · rate limit · error"]
+        Utils["utils/<br/>response · asyncHandler · documentFormats"]
+    end
+
+    subgraph Domain["modules/ — bounded contexts"]
+        Auth["auth"]
+        Users["users"]
+        JD["jobDescription"]
+        Interviews["interviews<br/>+ modes · panel · voices"]
+        Exams["exams"]
+        Questions["questions"]
+        Responses["responses"]
+        Feedback["feedback<br/>+ scoring · assessor"]
+        History["history"]
+        CV["cv"]
+        Speech["speech"]
+        Agent["agent<br/>gateway · session · prompt · transcript"]
+        AI["ai<br/>generators · prompts · parsers"]
+        Uploads["uploads"]
+    end
+
+    subgraph Config["config/ — external clients"]
+        Cfg["supabase · model · voice agent · storage"]
+    end
+
+    Server --> AppJs
+    AppJs --> Domain
+    Domain --> Core
+    Domain --> Config
+    Interviews --> AI
+    Exams --> AI
+    Feedback --> AI
+    CV --> AI
+    Agent --> Interviews
+    Agent --> Config

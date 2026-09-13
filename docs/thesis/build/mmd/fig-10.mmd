@@ -1,0 +1,33 @@
+sequenceDiagram
+    autonumber
+    participant App as Client
+    participant API as REST API
+    participant DB as Database
+    participant WS as Voice gateway
+    participant DG as Voice agent service
+
+    App->>API: POST /interviews/prepare (text or document)
+    API->>API: extract text, enforce minimum length
+    API->>DB: insert job_description + interview_session
+    API-->>App: 201 { session, mode, max_questions }
+
+    Note over App,WS: No questions yet — each is composed at the moment of asking.
+
+    App->>WS: WebSocket open
+    App->>WS: { type: "start", token, session_id, mode, panel }
+    WS->>DB: loadSessionContext (also the ownership check)
+    WS->>WS: resolvePanelSize → resolvePanel (distinct voices)
+    WS->>DG: open upstream socket, send Settings
+    WS-->>App: { type: "ready", maxQuestions }
+
+    loop each turn
+        App->>WS: binary PCM 16 kHz
+        WS->>DG: forward audio
+        DG-->>WS: recognised text, then synthesised speech
+        WS-->>App: { type: "speaker" | "transcript" | "progress" }
+        WS-->>App: binary PCM 24 kHz
+        WS->>DB: queue completed exchange
+    end
+
+    WS-->>App: { type: "closing" }
+    WS-->>App: { type: "done", asked }

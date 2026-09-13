@@ -1,0 +1,8 @@
+flowchart LR
+    R["user_responses row"] --> A["session.assessor<br/>builds the assessment prompt"]
+    A --> G["Language model"]
+    G --> P["feedback.parser<br/>extracts reported metrics"]
+    P --> S["scoring.engine<br/>readScore · meanOfReported"]
+    S --> F[("feedback row")]
+    F -.->|trigger| SS[("session_statistics")]
+    F -.->|trigger| IS[("interview_sessions.overall_score")]

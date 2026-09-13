@@ -1,0 +1,21 @@
+flowchart TB
+    subgraph Device["User device — iOS / Android / Web"]
+        App["<b>VoxPrep client</b><br/>Expo SDK 54 · React Native 0.81 · TypeScript<br/>File-based navigation"]
+    end
+
+    subgraph Server["Single Node.js process"]
+        REST["<b>REST API</b><br/>Express 5 · /api/v1/*"]
+        Gateway["<b>Voice gateway</b><br/>ws · /api/v1/interviews/agent"]
+    end
+
+    DB[("<b>PostgreSQL</b><br/>RLS on every user table")]
+    Auth["<b>Auth service</b><br/>JWT issuance and validation"]
+    Store["<b>Object storage</b><br/>Response audio"]
+
+    App -->|"HTTPS · Bearer JWT"| REST
+    App <-->|"WSS · JSON control + binary PCM"| Gateway
+    REST --> DB
+    REST --> Auth
+    REST --> Store
+    Gateway --> DB
+    Gateway --> Auth

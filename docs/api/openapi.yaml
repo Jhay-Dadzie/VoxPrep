@@ -1,0 +1,2589 @@
+openapi: 3.1.0
+
+info:
+  title: VoxPrep API
+  version: 1.0.0
+  summary: AI-powered interview and examination practice.
+  description: |
+    The HTTP surface of VoxPrep. Turns source material — a job description, a
+    thesis abstract, visa application details, or course notes — into either a
+    live spoken interview or a written multiple-choice exam, then grades the
+    result.
+
+    ## Conventions
+
+    Every endpoint returns one envelope:
+
+    ```jsonc
+    { "status": "success", "message": "…", "data": { } }
+    { "status": "error",   "message": "…" }
+    ```
+
+    The `/health` probes are the documented exception; they predate the
+    envelope and return `success: true`. They are described as they behave,
+    not as they ideally would, because monitoring may depend on the shape.
+
+    ## Authentication
+
+    Supabase Auth issues the tokens. Send `Authorization: Bearer <access_token>`
+    on every endpoint except those under `/auth` that create or recover a
+    session, and the health probes.
+
+    ## Error messages
+
+    A `4xx` `message` is written for the end user and is safe to display
+    verbatim. A `5xx` `message` is always generic — the detail is in the server
+    log, because an unanticipated error's message is an internal detail.
+
+    ## Ownership
+
+    A resource belonging to another user is reported as `404`, not `403`, so
+    the API does not confirm that someone else's id exists.
+
+    ## Live voice
+
+    The spoken interview is a WebSocket at `/api/v1/interviews/agent` and is
+    outside the scope of this document. See `docs/voice-agent-protocol.md`.
+  contact:
+    name: VoxPrep maintainers
+    url: https://github.com/
+  license:
+    name: ISC
+    identifier: ISC
+
+externalDocs:
+  description: Full documentation set
+  url: ../README.md
+
+servers:
+  - url: http://localhost:5050/api/v1
+    description: Local development
+  - url: https://{host}/api/v1
+    description: Deployed environment
+    variables:
+      host:
+        default: api.example.com
+
+tags:
+  - name: Health
+    description: Liveness probes. No authentication.
+  - name: Authentication
+    description: Sign-up, sign-in, refresh, OAuth, verification, password reset.
+  - name: Users
+    description: The authenticated user's own profile and account.
+  - name: Job descriptions
+    description: Source material, pasted or uploaded.
+  - name: Interviews
+    description: Spoken session lifecycle and the per-turn interview loop.
+  - name: Exams
+    description: Written multiple-choice papers — generation, sitting, marking.
+  - name: Questions
+    description: Bulk question generation outside the live loop.
+  - name: Responses
+    description: Candidate answers and per-session completion statistics.
+  - name: Speech
+    description: Transcription, synthesis, and the voice and format catalogues.
+  - name: Feedback
+    description: AI grading and session summaries.
+  - name: History
+    description: Reviewable past sessions.
+  - name: CV
+    description: CV tailoring against a session's job description.
+
+security:
+  - bearerAuth: []
+
+paths:
+
+  # ───────────────────────────────────────────────────────────── Health ─────
+
+  /health:
+    get:
+      tags: [Health]
+      summary: Server liveness
+      description: |
+        Mounted at the server root, **without** the `/api/v1` prefix — the full
+        path is `/health`.
+      operationId: getServerHealth
+      security: []
+      responses:
+        '200':
+          description: Server is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, const: true }
+                  message: { type: string, example: Server is healthy }
+                  timestamp: { type: string, format: date-time }
+
+  /auth/health:
+    get:
+      tags: [Health]
+      summary: Auth service liveness
+      operationId: getAuthHealth
+      security: []
+      responses:
+        '200': { $ref: '#/components/responses/LegacyHealthOk' }
+
+  /users/health:
+    get:
+      tags: [Health]
+      summary: User service liveness
+      operationId: getUserHealth
+      security: []
+      responses:
+        '200': { $ref: '#/components/responses/LegacyHealthOk' }
+
+  /responses/health:
+    get:
+      tags: [Health]
+      summary: Response service liveness
+      operationId: getResponseHealth
+      security: []
+      responses:
+        '200': { $ref: '#/components/responses/StatusHealthOk' }
+
+  /speech/health:
+    get:
+      tags: [Health]
+      summary: Speech service liveness
+      operationId: getSpeechHealth
+      security: []
+      responses:
+        '200': { $ref: '#/components/responses/StatusHealthOk' }
+
+  /feedback/health:
+    get:
+      tags: [Health]
+      summary: Feedback service liveness
+      operationId: getFeedbackHealth
+      security: []
+      responses:
+        '200': { $ref: '#/components/responses/LegacyHealthOk' }
+
+  # ─────────────────────────────────────────────────────── Authentication ───
+
+  /auth/signup:
+    post:
+      tags: [Authentication]
+      summary: Register a new account
+      description: |
+        Whether a session is returned immediately or an email confirmation is
+        required depends on the Supabase project's **Confirm email** setting,
+        mirrored server-side by `SUPABASE_EMAIL_CONFIRMATION`.
+
+        Rate limited.
+      operationId: signup
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string, format: password, minLength: 8 }
+                full_name: { type: string, maxLength: 255 }
+      responses:
+        '201':
+          description: Account created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuthSessionEnvelope' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '409':
+          description: An account with this email already exists
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+
+  /auth/login:
+    post:
+      tags: [Authentication]
+      summary: Authenticate and obtain a session
+      description: Rate limited.
+      operationId: login
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string, format: password }
+      responses:
+        '200':
+          description: Authenticated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuthSessionEnvelope' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+
+  /auth/refresh:
+    post:
+      tags: [Authentication]
+      summary: Exchange a refresh token for a fresh session
+      description: |
+        The refresh token may be sent in the body or as a `refresh_token`
+        cookie. The body takes precedence.
+
+        Clients should treat a **network** failure here as transient and keep
+        the stored session; only a rejected refresh token means the session is
+        over.
+      operationId: refreshSession
+      security: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                refresh_token: { type: string }
+      responses:
+        '200':
+          description: New session issued
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuthSessionEnvelope' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /auth/forgot-password:
+    post:
+      tags: [Authentication]
+      summary: Request a password reset email
+      description: Rate limited.
+      operationId: forgotPassword
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email: { type: string, format: email }
+      responses:
+        '200': { $ref: '#/components/responses/GenericOk' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+
+  /auth/verify-password-reset-otp:
+    post:
+      tags: [Authentication]
+      summary: Verify the emailed password-reset OTP
+      description: Rate limited.
+      operationId: verifyPasswordResetOtp
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, token]
+              properties:
+                email: { type: string, format: email }
+                token: { type: string }
+      responses:
+        '200': { $ref: '#/components/responses/GenericOk' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+
+  /auth/reset-password:
+    post:
+      tags: [Authentication]
+      summary: Set a new password using an emailed token
+      description: Rate limited.
+      operationId: resetPassword
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, token, password]
+              properties:
+                email: { type: string, format: email }
+                token: { type: string }
+                password: { type: string, format: password, minLength: 8 }
+      responses:
+        '200': { $ref: '#/components/responses/GenericOk' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+
+  /auth/resend-verification:
+    post:
+      tags: [Authentication]
+      summary: Resend the email-confirmation message
+      description: Rate limited.
+      operationId: resendVerification
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email: { type: string, format: email }
+      responses:
+        '200': { $ref: '#/components/responses/GenericOk' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+
+  /auth/verify-email:
+    get:
+      tags: [Authentication]
+      summary: Confirm an email address
+      description: Called from the link in the Supabase confirmation email.
+      operationId: verifyEmail
+      security: []
+      parameters:
+        - name: email
+          in: query
+          required: true
+          schema: { type: string, format: email }
+        - name: token
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { $ref: '#/components/responses/GenericOk' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+
+  /auth/google:
+    get:
+      tags: [Authentication]
+      summary: Begin Google OAuth
+      description: Redirects to Google. Returns to `FRONTEND_URL` on completion.
+      operationId: googleAuth
+      security: []
+      responses:
+        '302':
+          description: Redirect to the Google consent screen
+
+  /auth/google/callback:
+    get:
+      tags: [Authentication]
+      summary: Google OAuth callback
+      operationId: googleCallback
+      security: []
+      responses:
+        '302':
+          description: Redirect back to the application
+
+  /auth/me:
+    get:
+      tags: [Authentication]
+      summary: The currently authenticated user
+      operationId: getCurrentUser
+      responses:
+        '200':
+          description: Current user
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          user: { $ref: '#/components/schemas/User' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /auth/change-password:
+    post:
+      tags: [Authentication]
+      summary: Change password while signed in
+      description: Rate limited.
+      operationId: changePassword
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [current_password, new_password]
+              properties:
+                current_password: { type: string, format: password }
+                new_password: { type: string, format: password, minLength: 8 }
+      responses:
+        '200': { $ref: '#/components/responses/GenericOk' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+
+  /auth/logout:
+    post:
+      tags: [Authentication]
+      summary: End the current session
+      operationId: logout
+      responses:
+        '200': { $ref: '#/components/responses/GenericOk' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  # ────────────────────────────────────────────────────────────── Users ─────
+
+  /users/me:
+    get:
+      tags: [Users]
+      summary: Own profile
+      operationId: getProfile
+      responses:
+        '200':
+          description: Profile
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/User' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    patch:
+      tags: [Users]
+      summary: Update mutable profile fields
+      operationId: updateProfile
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                full_name: { type: string, maxLength: 255 }
+      responses:
+        '200':
+          description: Updated profile
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/User' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    delete:
+      tags: [Users]
+      summary: Permanently delete the account
+      description: |
+        Deletes the account and every child record. Requires
+        `SUPABASE_SECRET_KEY` to be configured server-side; without it the
+        endpoint reports `501`.
+      operationId: deleteAccount
+      responses:
+        '204':
+          description: Account deleted
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '501':
+          description: Server is not configured for account deletion
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+
+  /users/me/status:
+    patch:
+      tags: [Users]
+      summary: Activate or deactivate the account
+      description: |
+        Sets `is_active`. **This does not invalidate the outstanding JWT** — the
+        client should also call `POST /auth/logout`.
+      operationId: updateStatus
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [is_active]
+              properties:
+                is_active: { type: boolean }
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/User' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /users/me/complete-profile:
+    patch:
+      tags: [Users]
+      summary: Mark the profile complete
+      description: Idempotent — safe to call more than once. Takes an empty body.
+      operationId: completeProfile
+      responses:
+        '200':
+          description: Marked complete
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/User' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  # ────────────────────────────────────────────────── Job descriptions ──────
+
+  /job-descriptions:
+    post:
+      tags: [Job descriptions]
+      summary: Create source material
+      description: |
+        Accepts pasted text as JSON, or a document as `multipart/form-data` in
+        the `document` field. `job_content` must be at least 50 characters after
+        extraction.
+      operationId: createJobDescription
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/JobDescriptionInput' }
+          multipart/form-data:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/JobDescriptionInput'
+                - type: object
+                  properties:
+                    document:
+                      type: string
+                      format: binary
+                      description: A supported document. See `DocumentUpload`.
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/JobDescription' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    get:
+      tags: [Job descriptions]
+      summary: List own source material
+      operationId: listJobDescriptions
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Search'
+      responses:
+        '200':
+          description: A page of job descriptions
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          data:
+                            type: array
+                            items: { $ref: '#/components/schemas/JobDescription' }
+                          pagination: { $ref: '#/components/schemas/Pagination' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /job-descriptions/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      tags: [Job descriptions]
+      summary: One job description
+      operationId: getJobDescription
+      responses:
+        '200':
+          description: The job description
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/JobDescription' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      tags: [Job descriptions]
+      summary: Replace a job description
+      operationId: updateJobDescription
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/JobDescriptionInput' }
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/JobDescription' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [Job descriptions]
+      summary: Delete a job description
+      description: |
+        Sessions built from it are **not** deleted; their
+        `job_description_id` is set to null, because a completed session with
+        its feedback is a record the user earned.
+      operationId: deleteJobDescription
+      responses:
+        '200': { $ref: '#/components/responses/GenericOk' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ───────────────────────────────────────────────────────── Interviews ─────
+
+  /interviews/prepare:
+    post:
+      tags: [Interviews]
+      summary: Source material in, a session ready to interview out
+      description: |
+        The primary entry point for a spoken session. Accepts pasted text as
+        JSON or a document as `multipart/form-data`.
+
+        **No questions are returned.** They are written one at a time during the
+        interview — see `POST /interviews/{id}/turn`. `questionCount` is
+        accepted and ignored so an older client's setup request is not rejected.
+
+        Registered before `/{id}` so `prepare` is never read as a session id.
+      operationId: prepareInterview
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PrepareInput' }
+          multipart/form-data:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/PrepareInput'
+                - type: object
+                  properties:
+                    document: { type: string, format: binary }
+      responses:
+        '201':
+          description: Session ready
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          session: { $ref: '#/components/schemas/Session' }
+                          jobDescription: { $ref: '#/components/schemas/JobDescription' }
+                          mode: { $ref: '#/components/schemas/ModeId' }
+                          max_questions: { type: integer, example: 15 }
+        '400':
+          description: |
+            Validation failed, the document could not be read, it contained no
+            readable text, or fewer than 50 characters were supplied.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+              examples:
+                tooShort:
+                  value:
+                    status: error
+                    message: Add more detail before generating questions - paste the description or upload a document (at least 50 characters).
+                unreadable:
+                  value:
+                    status: error
+                    message: That document appears to be empty or contains no readable text. If it is a scanned image, paste the text instead.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /interviews:
+    post:
+      tags: [Interviews]
+      summary: Create a session against existing source material
+      operationId: createInterviewSession
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                job_description_id: { type: [string, 'null'], format: uuid }
+                session_title: { type: string, maxLength: 255 }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Session' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    get:
+      tags: [Interviews]
+      summary: List sessions
+      operationId: listInterviewSessions
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Search'
+      responses:
+        '200':
+          description: A page of sessions
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          data:
+                            type: array
+                            items: { $ref: '#/components/schemas/SessionListItem' }
+                          pagination: { $ref: '#/components/schemas/Pagination' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /interviews/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      tags: [Interviews]
+      summary: Session detail, with questions and responses
+      operationId: getInterviewSession
+      responses:
+        '200':
+          description: Session detail
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/SessionDetail' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [Interviews]
+      summary: Delete a session
+      operationId: deleteInterviewSession
+      responses:
+        '200': { $ref: '#/components/responses/GenericOk' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /interviews/{id}/start:
+    post:
+      tags: [Interviews]
+      summary: Mark a session started
+      operationId: startSession
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      responses:
+        '200': { $ref: '#/components/responses/SessionOk' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /interviews/{id}/pause:
+    post:
+      tags: [Interviews]
+      summary: Pause a session
+      operationId: pauseSession
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      responses:
+        '200': { $ref: '#/components/responses/SessionOk' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /interviews/{id}/continue:
+    post:
+      tags: [Interviews]
+      summary: Resume a paused session
+      operationId: continueSession
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      responses:
+        '200': { $ref: '#/components/responses/SessionOk' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /interviews/{id}/complete:
+    post:
+      tags: [Interviews]
+      summary: Complete a session
+      operationId: completeSession
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      responses:
+        '200': { $ref: '#/components/responses/SessionOk' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /interviews/{id}/retake:
+    post:
+      tags: [Interviews]
+      summary: Run a finished interview again
+      description: Creates a new session on the same source material.
+      operationId: retakeSession
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      responses:
+        '201': { $ref: '#/components/responses/SessionOk' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /interviews/{id}/turn:
+    post:
+      tags: [Interviews]
+      summary: The interview loop — get the next question
+      description: |
+        One call per turn. Returns the next question to put to the candidate, or
+        `done: true` with a closing remark.
+
+        `mode` rides on every turn rather than being stored on the session: it
+        shapes the interviewer's persona only, and `interview_sessions` has no
+        column for it.
+
+        `max_questions` lets a client run a shorter interview; the server clamps
+        it to `MAX_SESSION_QUESTIONS` (15), so a client cannot ask for more.
+
+        `repeated: true` means this question was already outstanding — the
+        client is retrying a turn rather than being given a new one.
+      operationId: nextTurn
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                mode: { $ref: '#/components/schemas/ModeId' }
+                max_questions: { type: integer, minimum: 1, maximum: 15 }
+                candidate_name: { type: [string, 'null'], maxLength: 120 }
+      responses:
+        '200':
+          description: The next turn
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Turn' }
+        '400':
+          description: |
+            Invalid payload, or the session cannot be continued — already
+            completed, no source material, or it is a written exam.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404':
+          description: Interview session not found
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+
+  /interviews/{id}/questions:
+    post:
+      tags: [Interviews]
+      summary: Bulk-generate questions
+      description: |
+        Generates a batch of questions outside the live turn loop. Not used by
+        the spoken interview path, which generates per turn.
+      operationId: addQuestions
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                questionCount:
+                  type: integer
+                  minimum: 1
+                  maximum: 20
+                  default: 10
+                jobData:
+                  type: object
+                  required: [title, job_content]
+                  properties:
+                    title: { type: string, minLength: 2, maxLength: 100 }
+                    company_name: { type: [string, 'null'] }
+                    job_content: { type: string, minLength: 50 }
+                    key_skills:
+                      type: array
+                      items: { type: string }
+                    required_experience_level: { $ref: '#/components/schemas/ExperienceLevel' }
+                    industry: { type: [string, 'null'], maxLength: 100 }
+      responses:
+        '201':
+          description: Questions generated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          questions:
+                            type: array
+                            items: { $ref: '#/components/schemas/InterviewQuestion' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /interviews/{sessionId}/questions/{questionId}/answer:
+    post:
+      tags: [Interviews]
+      summary: Submit an answer to a question
+      operationId: submitInterviewAnswer
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+        - $ref: '#/components/parameters/QuestionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [answer_text]
+              properties:
+                answer_text: { type: string, minLength: 1 }
+                audio_url: { type: [string, 'null'], format: uri }
+                original_audio_url: { type: [string, 'null'], format: uri }
+                storage_path: { type: [string, 'null'] }
+                response_duration_seconds: { type: integer, minimum: 0 }
+      responses:
+        '200':
+          description: Answer recorded
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          response_id: { type: string, format: uuid }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ─────────────────────────────────────────────────────────────── Exams ────
+
+  /exams/prepare:
+    post:
+      tags: [Exams]
+      summary: Source material in, a generated paper out
+      description: |
+        Unlike `/interviews/prepare`, this really does generate the questions —
+        an exam is written in full before the student sees the first one — so it
+        is the **slowest request in the app** and clients should budget for it.
+
+        Papers are 30 questions of 4 options each. Registered before
+        `/{sessionId}` so `prepare` is never read as a session id.
+      operationId: prepareExam
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PrepareInput' }
+          multipart/form-data:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/PrepareInput'
+                - type: object
+                  properties:
+                    document: { type: string, format: binary }
+      responses:
+        '201':
+          description: Exam ready
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          session: { $ref: '#/components/schemas/ExamSession' }
+                          job_description: { $ref: '#/components/schemas/JobDescriptionSummary' }
+                          question_count: { type: integer, example: 30 }
+                          option_count: { type: integer, example: 4 }
+        '400':
+          description: Validation failed, the document was unreadable, or under 50 characters
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '422':
+          description: |
+            The material was accepted but too thin to set a paper from — the
+            generator could not write enough questions.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+
+  /exams/{sessionId}:
+    get:
+      tags: [Exams]
+      summary: The paper as it is sat
+      description: |
+        Includes any answers already given, so a closed app or a dropped
+        connection resumes exactly where it left off.
+
+        **Never returns `correct_option` or `explanation`.** The shape has no
+        field for them until the paper has been marked.
+      operationId: getExam
+      parameters: [{ $ref: '#/components/parameters/SessionId' }]
+      responses:
+        '200':
+          description: The paper
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          session: { $ref: '#/components/schemas/ExamSession' }
+                          submitted: { type: boolean }
+                          questions:
+                            type: array
+                            items: { $ref: '#/components/schemas/SittingQuestion' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /exams/{sessionId}/answers/{questionId}:
+    put:
+      tags: [Exams]
+      summary: Record or change one selection
+      description: |
+        One answer per question — re-sending replaces the previous selection.
+        The label is validated against the options actually on the question.
+      operationId: saveExamAnswer
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+        - $ref: '#/components/parameters/QuestionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [selected_option]
+              properties:
+                selected_option:
+                  type: string
+                  pattern: '^[A-Z]$'
+                  example: B
+      responses:
+        '200':
+          description: Selection recorded
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          answered_count: { type: integer }
+                          total_questions: { type: integer }
+        '400':
+          description: Malformed label, the option is not on this question, or the paper is already submitted
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /exams/{sessionId}/submit:
+    post:
+      tags: [Exams]
+      summary: Mark the paper
+      description: |
+        Marks arithmetically and returns the result in the same response — the
+        student pressed "Complete Exam" and the next thing they should see is
+        their score, not a spinner waiting on a second request.
+      operationId: submitExam
+      parameters: [{ $ref: '#/components/parameters/SessionId' }]
+      responses:
+        '200': { $ref: '#/components/responses/ExamResultOk' }
+        '400':
+          description: There are no questions to mark
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /exams/{sessionId}/result:
+    get:
+      tags: [Exams]
+      summary: The marked paper
+      operationId: getExamResult
+      parameters: [{ $ref: '#/components/parameters/SessionId' }]
+      responses:
+        '200': { $ref: '#/components/responses/ExamResultOk' }
+        '404':
+          description: No marked exam found for this session
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+
+  /exams/{sessionId}/retake:
+    post:
+      tags: [Exams]
+      summary: A fresh paper on the same material
+      operationId: retakeExam
+      parameters: [{ $ref: '#/components/parameters/SessionId' }]
+      responses:
+        '201':
+          description: New paper ready
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          session: { $ref: '#/components/schemas/ExamSession' }
+                          question_count: { type: integer }
+                          option_count: { type: integer }
+        '400':
+          description: The source material is no longer available
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422':
+          description: Could not write enough exam questions
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+
+  # ─────────────────────────────────────────────────────────── Questions ────
+
+  /questions/generate:
+    post:
+      tags: [Questions]
+      summary: Generate questions for a session
+      description: |
+        Bulk generation outside the live interview loop. The spoken path uses
+        `POST /interviews/{id}/turn` instead.
+      operationId: generateSessionQuestions
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [session_id]
+              properties:
+                session_id: { type: string, format: uuid }
+                questionCount: { type: integer, minimum: 1, maximum: 20 }
+                mode: { $ref: '#/components/schemas/ModeId' }
+      responses:
+        '200':
+          description: Questions generated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          questions:
+                            type: array
+                            items: { $ref: '#/components/schemas/InterviewQuestion' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  # ─────────────────────────────────────────────────────────── Responses ────
+
+  /responses/sessions/{sessionId}/questions/{questionId}:
+    parameters:
+      - $ref: '#/components/parameters/SessionId'
+      - $ref: '#/components/parameters/QuestionId'
+    post:
+      tags: [Responses]
+      summary: Submit or replace an answer
+      description: One response per (question, user) pair. Re-submitting replaces the previous.
+      operationId: submitResponse
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [transcribed_text]
+              properties:
+                transcribed_text: { type: string, minLength: 1 }
+                original_audio_url: { type: [string, 'null'], format: uri }
+                response_duration_seconds: { type: [integer, 'null'], minimum: 0 }
+                transcription_confidence:
+                  type: [number, 'null']
+                  minimum: 0
+                  maximum: 1
+      responses:
+        '201':
+          description: Response recorded
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Response' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    get:
+      tags: [Responses]
+      summary: The answer to one question
+      description: Returns `404` when the user has not yet answered this question.
+      operationId: getQuestionResponse
+      responses:
+        '200':
+          description: The response, with feedback when available
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Response' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /responses/sessions/{sessionId}:
+    get:
+      tags: [Responses]
+      summary: All answers in a session
+      operationId: getSessionResponses
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+        - $ref: '#/components/parameters/Page'
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+        - name: include_feedback
+          in: query
+          description: Include AI feedback where it exists.
+          schema: { type: boolean, default: false }
+      responses:
+        '200':
+          description: A page of responses
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          data:
+                            type: array
+                            items: { $ref: '#/components/schemas/Response' }
+                          pagination: { $ref: '#/components/schemas/Pagination' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /responses/sessions/{sessionId}/stats:
+    get:
+      tags: [Responses]
+      summary: Completion metrics for a session
+      description: |
+        Registered before the deeper `/questions/{questionId}` route so `stats`
+        is never captured as a question id.
+      operationId: getSessionStats
+      parameters: [{ $ref: '#/components/parameters/SessionId' }]
+      responses:
+        '200':
+          description: Completion metrics
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          session_id: { type: string, format: uuid }
+                          total_questions: { type: integer }
+                          questions_answered: { type: integer }
+                          questions_pending: { type: integer }
+                          completion_percentage: { type: number }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /responses/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      tags: [Responses]
+      summary: One response by id
+      operationId: getResponseById
+      parameters:
+        - name: include_feedback
+          in: query
+          schema: { type: boolean, default: false }
+      responses:
+        '200':
+          description: The response
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Response' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      tags: [Responses]
+      summary: Correct a response
+      description: |
+        Allows fixing a speech-to-text transcription before grading. Refused
+        once the session is completed.
+      operationId: updateResponse
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              minProperties: 1
+              properties:
+                transcribed_text: { type: string }
+                original_audio_url: { type: [string, 'null'], format: uri }
+                response_duration_seconds: { type: [integer, 'null'] }
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Response' }
+        '400':
+          description: Not permitted on a completed session
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [Responses]
+      summary: Delete a response
+      description: Adjusts the session's answered count. Refused on completed sessions.
+      operationId: deleteResponse
+      responses:
+        '204': { description: Deleted }
+        '400':
+          description: Not permitted on a completed session
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ────────────────────────────────────────────────────────────── Speech ────
+
+  /speech/transcribe:
+    post:
+      tags: [Speech]
+      summary: Transcribe an uploaded audio file
+      description: |
+        `multipart/form-data`, field name `audio`, one file, 25 MB maximum.
+        Audio is held in memory and never written to disk by the API.
+      operationId: transcribeAudio
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [audio]
+              properties:
+                audio: { type: string, format: binary }
+                session_id:
+                  type: string
+                  format: uuid
+                  description: Groups the stored object under a session path.
+                question_id: { type: string, format: uuid }
+                save_audio:
+                  type: boolean
+                  description: Legacy flag, retained for backwards compatibility.
+                language: { type: string, default: en }
+                smart_format: { type: boolean, default: true }
+                punctuate: { type: boolean, default: true }
+                paragraphs: { type: boolean, default: true }
+                diarize: { type: boolean, default: false }
+                utterances: { type: boolean, default: false }
+                duration_seconds:
+                  type: number
+                  description: The recorder's own measured length.
+      responses:
+        '200':
+          description: Transcript
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/StatusSuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Transcript' }
+        '400':
+          description: |
+            Unsupported audio format, file over 25 MB, or an unexpected field
+            name (it must be `audio`).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /speech/transcribe-url:
+    post:
+      tags: [Speech]
+      summary: Transcribe audio from a URL
+      operationId: transcribeUrl
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [url]
+              properties:
+                url: { type: string, format: uri }
+                language: { type: string, default: en }
+                smart_format: { type: boolean, default: true }
+                punctuate: { type: boolean, default: true }
+                paragraphs: { type: boolean, default: true }
+                diarize: { type: boolean, default: false }
+                utterances: { type: boolean, default: false }
+      responses:
+        '200':
+          description: Transcript. Same shape as `/speech/transcribe`, without `audio_url` and `storage_path`.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/StatusSuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Transcript' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+
+  /speech/synthesize:
+    post:
+      tags: [Speech]
+      summary: Text to speech
+      description: |
+        `voice` accepts either a VoxPrep roster id (`m_measured_01`) or a
+        catalogue key (`orus`). Unknown values fall back to the default rather
+        than erroring — a stale voice id from an older build should still
+        produce audio.
+      operationId: synthesizeSpeech
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [text]
+              properties:
+                text: { type: string }
+                voice: { type: string, example: kore }
+                style: { type: string }
+                encoding: { type: string }
+                sample_rate: { type: integer }
+      responses:
+        '200':
+          description: 24 kHz mono WAV
+          headers:
+            X-Voice:
+              description: The voice key actually used.
+              schema: { type: string }
+            X-Character-Count:
+              description: Characters synthesised.
+              schema: { type: integer }
+          content:
+            audio/wav:
+              schema: { type: string, format: binary }
+        '400': { $ref: '#/components/responses/BadRequest' }
+
+  /speech/voices:
+    get:
+      tags: [Speech]
+      summary: Available voices
+      operationId: getVoices
+      responses:
+        '200':
+          description: Voice catalogue
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/StatusSuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/VoiceInfo' }
+
+  /speech/formats:
+    get:
+      tags: [Speech]
+      summary: Accepted audio input formats
+      operationId: getSupportedFormats
+      responses:
+        '200':
+          description: MIME types
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/StatusSuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { type: string, example: audio/webm }
+
+  # ──────────────────────────────────────────────────────────── Feedback ────
+
+  /feedback/sessions/{sessionId}/generate:
+    post:
+      tags: [Feedback]
+      summary: Grade every answer in a finished session
+      operationId: generateSessionFeedback
+      parameters: [{ $ref: '#/components/parameters/SessionId' }]
+      responses:
+        '200':
+          description: Grading complete
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          session_id: { type: string, format: uuid }
+                          graded: { type: integer }
+                          feedback:
+                            type: array
+                            items: { $ref: '#/components/schemas/Feedback' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /feedback/sessions/{sessionId}/summary:
+    get:
+      tags: [Feedback]
+      summary: Aggregated scores for a session
+      description: |
+        Registered before the bare `/sessions/{sessionId}` route, matching the
+        route-ordering convention used throughout this API.
+      operationId: getSessionFeedbackSummary
+      parameters: [{ $ref: '#/components/parameters/SessionId' }]
+      responses:
+        '200':
+          description: Session summary
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/FeedbackSummary' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /feedback/sessions/{sessionId}:
+    get:
+      tags: [Feedback]
+      summary: Per-question feedback for a session
+      operationId: getSessionFeedback
+      parameters: [{ $ref: '#/components/parameters/SessionId' }]
+      responses:
+        '200':
+          description: Feedback list
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/Feedback' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /feedback/responses/{responseId}/regenerate:
+    post:
+      tags: [Feedback]
+      summary: Re-grade one answer
+      operationId: regenerateResponseFeedback
+      parameters:
+        - name: responseId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Regenerated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Feedback' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /feedback/responses/{responseId}:
+    get:
+      tags: [Feedback]
+      summary: Feedback for one answer
+      operationId: getResponseFeedback
+      parameters:
+        - name: responseId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Feedback
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Feedback' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ───────────────────────────────────────────────────────────── History ────
+
+  /history:
+    get:
+      tags: [History]
+      summary: Reviewable sessions
+      description: |
+        Covers sessions with status `completed` or `paused`. Active-session
+        lifecycle lives under `/interviews`.
+      operationId: getHistory
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Search'
+        - name: sort
+          in: query
+          description: |
+            `recent` — most recently attempted first (default).
+            `oldest` — oldest first.
+            `score_desc` — best performance first.
+            `score_asc` — weakest first, for targeted review.
+          schema:
+            type: string
+            enum: [recent, oldest, score_desc, score_asc]
+            default: recent
+      responses:
+        '200':
+          description: A page of reviewable sessions
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          data:
+                            type: array
+                            items: { $ref: '#/components/schemas/HistoryItem' }
+                          pagination: { $ref: '#/components/schemas/Pagination' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /history/stats:
+    get:
+      tags: [History]
+      summary: Totals and average score
+      description: Registered before `/{id}` so `stats` is not matched as a session id.
+      operationId: getHistoryStats
+      responses:
+        '200':
+          description: Aggregate statistics
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/HistoryStats' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /history/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      tags: [History]
+      summary: Full session review
+      description: Questions, responses, and per-answer feedback.
+      operationId: getHistoryById
+      responses:
+        '200':
+          description: Session detail
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/HistoryDetail' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [History]
+      summary: Delete a session permanently
+      operationId: deleteHistorySession
+      responses:
+        '200': { $ref: '#/components/responses/GenericOk' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /history/{id}/archive:
+    patch:
+      tags: [History]
+      summary: Toggle archived
+      operationId: archiveSession
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [is_archived]
+              properties:
+                is_archived: { type: boolean }
+      responses:
+        '200': { $ref: '#/components/responses/GenericOk' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /history/{id}/notes:
+    patch:
+      tags: [History]
+      summary: Update session notes
+      operationId: updateNotes
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [notes]
+              properties:
+                notes: { type: [string, 'null'] }
+      responses:
+        '200': { $ref: '#/components/responses/GenericOk' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ────────────────────────────────────────────────────────────────── CV ────
+
+  /cv/sessions/{sessionId}/tailor:
+    post:
+      tags: [CV]
+      summary: Rewrite a CV against the session's job description
+      description: |
+        `multipart/form-data`, field name `cv`.
+
+        The extracted text of the uploaded CV is **never stored**. Only the file
+        name and character count are retained; the rewritten document is what
+        persists.
+      operationId: tailorSessionCv
+      parameters: [{ $ref: '#/components/parameters/SessionId' }]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [cv]
+              properties:
+                cv:
+                  type: string
+                  format: binary
+                  description: A supported document. See `DocumentUpload`.
+      responses:
+        '201':
+          description: Tailored CV
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/TailoredCv' }
+        '400':
+          description: No file, unsupported format, or unreadable document
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /cv/sessions/{sessionId}:
+    get:
+      tags: [CV]
+      summary: The most recent tailored CV for a session
+      description: Registered before `/{id}` so `sessions` is never read as a CV id.
+      operationId: getSessionCv
+      parameters: [{ $ref: '#/components/parameters/SessionId' }]
+      responses:
+        '200':
+          description: Tailored CV
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        oneOf:
+                          - { $ref: '#/components/schemas/TailoredCv' }
+                          - { type: 'null' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /cv/{id}:
+    get:
+      tags: [CV]
+      summary: One tailored CV
+      operationId: getCvById
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      responses:
+        '200':
+          description: Tailored CV
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/TailoredCv' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+# ═══════════════════════════════════════════════════════════ components ════
+
+components:
+
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: A Supabase Auth access token, obtained from `/auth/login` or `/auth/refresh`.
+
+  parameters:
+    Id:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    SessionId:
+      name: sessionId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    QuestionId:
+      name: questionId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    Page:
+      name: page
+      in: query
+      schema: { type: integer, minimum: 1, default: 1 }
+    Limit:
+      name: limit
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 100, default: 10 }
+    Search:
+      name: search
+      in: query
+      schema: { type: string, maxLength: 255 }
+
+  responses:
+    GenericOk:
+      description: Success
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/SuccessEnvelope' }
+    SessionOk:
+      description: The session
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/SuccessEnvelope'
+              - type: object
+                properties:
+                  data: { $ref: '#/components/schemas/Session' }
+    ExamResultOk:
+      description: The marked paper
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/SuccessEnvelope'
+              - type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      session: { $ref: '#/components/schemas/ExamSession' }
+                      totals: { $ref: '#/components/schemas/ExamTotals' }
+                      questions:
+                        type: array
+                        items: { $ref: '#/components/schemas/MarkedQuestion' }
+    LegacyHealthOk:
+      description: Healthy
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              success: { type: boolean, const: true }
+              message: { type: string }
+    StatusHealthOk:
+      description: Healthy
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              status: { type: string, const: success }
+              message: { type: string }
+    BadRequest:
+      description: Validation failed, or the action is invalid in the current state. The message is written for the end user.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    Unauthorized:
+      description: Missing, malformed, or expired access token.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+          example:
+            status: error
+            message: Your session has expired. Sign in again.
+    NotFound:
+      description: |
+        No such resource — or it belongs to another user. Ownership failures are
+        reported as `404` so the API does not confirm that someone else's id
+        exists.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    TooManyRequests:
+      description: Rate limit exceeded.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+
+  schemas:
+
+    # ── Envelopes ──────────────────────────────────────────────────────────
+
+    SuccessEnvelope:
+      type: object
+      required: [status]
+      properties:
+        status: { type: string, const: success }
+        message: { type: string }
+        data: {}
+
+    StatusSuccessEnvelope:
+      type: object
+      required: [status]
+      properties:
+        status: { type: string, const: success }
+        data: {}
+
+    ErrorEnvelope:
+      type: object
+      required: [status, message]
+      properties:
+        status: { type: string, const: error }
+        message:
+          type: string
+          description: |
+            For `4xx`, written for the end user and safe to display verbatim.
+            For `5xx`, always generic — the detail is in the server log.
+        errors:
+          type: array
+          description: Field-level detail, when available.
+          items: {}
+        stack:
+          type: string
+          description: Present only when `NODE_ENV=development`.
+
+    Pagination:
+      type: object
+      properties:
+        page: { type: integer }
+        limit: { type: integer }
+        total: { type: integer }
+        totalPages: { type: integer }
+
+    # ── Enumerations ───────────────────────────────────────────────────────
+
+    ModeId:
+      type: string
+      description: |
+        A practice mode. `job_interview`, `viva_defense`, and `visa_interview`
+        are spoken; `exam` is a written paper.
+
+        `oral_exam` is a retired id still sent by older client builds. It is
+        accepted and normalised to `exam`.
+      enum: [job_interview, exam, viva_defense, visa_interview, oral_exam]
+      default: job_interview
+
+    ExperienceLevel:
+      type: [string, 'null']
+      enum: [entry, junior, mid, senior, lead, null]
+
+    SessionStatus:
+      type: string
+      enum: [in_progress, completed, paused]
+
+    SessionKind:
+      type: string
+      enum: [interview, exam]
+
+    QuestionType:
+      type: [string, 'null']
+      enum: [behavioral, technical, situational, general, null]
+
+    Difficulty:
+      type: [string, 'null']
+      enum: [easy, medium, hard, null]
+
+    Score:
+      type: [number, 'null']
+      minimum: 0
+      maximum: 100
+      description: |
+        0–100. **Null means the grader did not report this dimension** — it is
+        excluded from averages rather than counted as zero.
+
+    DocumentUpload:
+      type: string
+      format: binary
+      description: |
+        A document in one of: PDF, DOC, DOCX, ODT, RTF, TXT, MD, CSV, PPTX, ODP,
+        XLSX, ODS.
+
+        Format is resolved from the **filename extension first**, MIME type
+        second — React Native uploads frequently declare
+        `application/octet-stream`.
+
+        Legacy binary `.ppt` and `.xls` are rejected with a message asking the
+        user to re-save as `.pptx` / `.xlsx`.
+
+        There is **no size ceiling** on document uploads; the bytes live in
+        memory only for the length of the request.
+
+    # ── Auth and users ─────────────────────────────────────────────────────
+
+    AuthSessionEnvelope:
+      allOf:
+        - $ref: '#/components/schemas/SuccessEnvelope'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                session: { $ref: '#/components/schemas/AuthSession' }
+                user: { $ref: '#/components/schemas/User' }
+
+    AuthSession:
+      type: object
+      properties:
+        access_token: { type: string }
+        refresh_token: { type: string }
+        expires_at:
+          type: integer
+          description: Unix epoch seconds.
+        token_type: { type: string, example: bearer }
+
+    User:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string, format: email }
+        full_name: { type: [string, 'null'] }
+        is_active: { type: boolean }
+        profile_completed: { type: boolean }
+        avatar_url: { type: [string, 'null'] }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        last_login: { type: [string, 'null'], format: date-time }
+
+    # ── Job descriptions ───────────────────────────────────────────────────
+
+    JobDescriptionInput:
+      type: object
+      properties:
+        title: { type: string, minLength: 2, maxLength: 255 }
+        company_name: { type: [string, 'null'], maxLength: 255 }
+        job_content:
+          type: string
+          minLength: 50
+          description: Required unless a document is attached, in which case it is extracted.
+        key_skills:
+          type: array
+          items: { type: string }
+        required_experience_level: { $ref: '#/components/schemas/ExperienceLevel' }
+        industry: { type: [string, 'null'], maxLength: 100 }
+
+    JobDescription:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        title: { type: string }
+        company_name: { type: [string, 'null'] }
+        job_content: { type: string }
+        key_skills:
+          type: array
+          items: { type: string }
+        required_experience_level: { $ref: '#/components/schemas/ExperienceLevel' }
+        industry: { type: [string, 'null'] }
+        is_active: { type: boolean }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    JobDescriptionSummary:
+      type: [object, 'null']
+      properties:
+        id: { type: string, format: uuid }
+        title: { type: string }
+        company_name: { type: [string, 'null'] }
+        industry: { type: [string, 'null'] }
+        key_skills:
+          type: array
+          items: { type: string }
+
+    # ── Sessions ───────────────────────────────────────────────────────────
+
+    PrepareInput:
+      type: object
+      description: |
+        Arrives as `multipart/form-data` when a document is attached, so every
+        field is a string on the wire; the server coerces. `job_content` is
+        optional because the text may come from the attached document — one of
+        the two must be present, and at least 50 characters after extraction.
+      properties:
+        job_content: { type: [string, 'null'] }
+        title: { type: [string, 'null'], maxLength: 255 }
+        company_name: { type: [string, 'null'], maxLength: 255 }
+        required_experience_level: { $ref: '#/components/schemas/ExperienceLevel' }
+        industry: { type: [string, 'null'], maxLength: 100 }
+        mode: { $ref: '#/components/schemas/ModeId' }
+        session_title: { type: [string, 'null'], maxLength: 255 }
+        questionCount:
+          type: integer
+          minimum: 1
+          maximum: 20
+          deprecated: true
+          description: |
+            Accepted and ignored on `/interviews/prepare` — questions are no
+            longer generated up front. Retained so an older client's setup
+            request is not rejected outright.
+
+    Session:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        session_title: { type: [string, 'null'] }
+        status: { $ref: '#/components/schemas/SessionStatus' }
+        session_kind: { $ref: '#/components/schemas/SessionKind' }
+        job_description_id: { type: [string, 'null'], format: uuid }
+        total_questions: { type: integer }
+        questions_answered: { type: integer }
+        overall_score: { $ref: '#/components/schemas/Score' }
+        started_at: { type: [string, 'null'], format: date-time }
+        completed_at: { type: [string, 'null'], format: date-time }
+        duration_seconds: { type: [integer, 'null'] }
+        is_archived: { type: boolean }
+        notes: { type: [string, 'null'] }
+
+    SessionListItem:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        session_title: { type: [string, 'null'] }
+        status: { $ref: '#/components/schemas/SessionStatus' }
+        job_title: { type: [string, 'null'] }
+        company_name: { type: [string, 'null'] }
+        total_questions: { type: integer }
+        questions_answered: { type: integer }
+        overall_score: { $ref: '#/components/schemas/Score' }
+        started_at: { type: [string, 'null'], format: date-time }
+        completed_at: { type: [string, 'null'], format: date-time }
+        duration_seconds: { type: [integer, 'null'] }
+
+    SessionDetail:
+      allOf:
+        - $ref: '#/components/schemas/Session'
+        - type: object
+          properties:
+            job_description: { $ref: '#/components/schemas/JobDescriptionSummary' }
+            questions:
+              type: array
+              items: { $ref: '#/components/schemas/QuestionWithResponse' }
+
+    Turn:
+      type: object
+      properties:
+        done:
+          type: boolean
+          description: True when the interview has finished; no further question is returned.
+        reason: { type: [string, 'null'] }
+        closing_remark: { type: [string, 'null'] }
+        repeated:
+          type: boolean
+          description: |
+            True when this question was already outstanding — the client is
+            retrying a turn rather than being given a new one.
+        question:
+          oneOf:
+            - { $ref: '#/components/schemas/InterviewQuestion' }
+            - { type: 'null' }
+        asked_count: { type: integer }
+        max_questions: { type: integer, example: 15 }
+
+    # ── Interview questions and responses ──────────────────────────────────
+
+    InterviewQuestion:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        question_number: { type: integer }
+        question_text: { type: string }
+        question_type: { $ref: '#/components/schemas/QuestionType' }
+        difficulty_level: { $ref: '#/components/schemas/Difficulty' }
+        ideal_answer_guidelines: { type: [string, 'null'] }
+        generated_at: { type: string, format: date-time }
+        ai_model_used: { type: [string, 'null'] }
+
+    QuestionWithResponse:
+      allOf:
+        - $ref: '#/components/schemas/InterviewQuestion'
+        - type: object
+          properties:
+            response:
+              oneOf:
+                - { $ref: '#/components/schemas/Response' }
+                - { type: 'null' }
+
+    Response:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        transcribed_text: { type: string }
+        audio_url: { type: [string, 'null'], format: uri }
+        response_duration_seconds: { type: [integer, 'null'] }
+        transcription_confidence: { type: [number, 'null'], minimum: 0, maximum: 1 }
+        responded_at: { type: [string, 'null'], format: date-time }
+        feedback:
+          oneOf:
+            - { $ref: '#/components/schemas/Feedback' }
+            - { type: 'null' }
+
+    # ── Exams ──────────────────────────────────────────────────────────────
+
+    ExamSession:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        session_title: { type: [string, 'null'] }
+        status: { $ref: '#/components/schemas/SessionStatus' }
+        session_kind: { type: string, const: exam }
+        total_questions: { type: integer }
+        questions_answered: { type: integer }
+        overall_score: { $ref: '#/components/schemas/Score' }
+        started_at: { type: [string, 'null'], format: date-time }
+        completed_at: { type: [string, 'null'], format: date-time }
+        duration_seconds: { type: [integer, 'null'] }
+        job_description: { $ref: '#/components/schemas/JobDescriptionSummary' }
+
+    ExamOption:
+      type: object
+      properties:
+        label: { type: string, example: A }
+        text: { type: string }
+
+    SittingQuestion:
+      type: object
+      description: |
+        A question as it is sat. This shape has **no field** for the correct
+        option or the explanation — a stronger guarantee than remembering to
+        remove them.
+      properties:
+        id: { type: string, format: uuid }
+        question_number: { type: integer }
+        question_text: { type: string }
+        options:
+          type: array
+          items: { $ref: '#/components/schemas/ExamOption' }
+        topic: { type: [string, 'null'] }
+        difficulty_level: { $ref: '#/components/schemas/Difficulty' }
+        selected_option:
+          type: [string, 'null']
+          description: The student's current selection, so a closed app resumes where it left off.
+
+    MarkedQuestion:
+      allOf:
+        - $ref: '#/components/schemas/SittingQuestion'
+        - type: object
+          properties:
+            correct_option: { type: string, example: C }
+            explanation: { type: [string, 'null'] }
+            is_correct: { type: boolean }
+
+    ExamTotals:
+      type: object
+      properties:
+        total_questions: { type: integer, example: 30 }
+        answered: { type: integer }
+        correct: { type: integer }
+        score:
+          type: number
+          description: Percentage, 0–100.
+
+    # ── Speech ─────────────────────────────────────────────────────────────
+
+    Transcript:
+      type: object
+      properties:
+        transcript: { type: string }
+        confidence: { type: [number, 'null'], minimum: 0, maximum: 1 }
+        duration: { type: [number, 'null'] }
+        detected_language: { type: [string, 'null'] }
+        words: { type: array, items: {} }
+        paragraphs: { type: array, items: {} }
+        utterances: { type: array, items: {} }
+        audio_url:
+          type: [string, 'null']
+          description: Present only for uploads that were stored.
+        storage_path: { type: [string, 'null'] }
+
+    VoiceInfo:
+      type: object
+      properties:
+        key:
+          type: string
+          description: Catalogue key, e.g. `kore`.
+        gender: { type: [string, 'null'] }
+        description: { type: [string, 'null'] }
+
+    # ── Feedback ───────────────────────────────────────────────────────────
+
+    Feedback:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        response_id: { type: string, format: uuid }
+        question_id: { type: string, format: uuid }
+        session_id: { type: string, format: uuid }
+        scores:
+          type: object
+          properties:
+            relevance: { $ref: '#/components/schemas/Score' }
+            completeness: { $ref: '#/components/schemas/Score' }
+            technical_accuracy: { $ref: '#/components/schemas/Score' }
+            clarity: { $ref: '#/components/schemas/Score' }
+            confidence: { $ref: '#/components/schemas/Score' }
+        overall_score:
+          allOf:
+            - $ref: '#/components/schemas/Score'
+          description: Mean of the sub-scores the grader actually reported.
+        strengths:
+          type: array
+          items: { type: string }
+        improvements:
+          type: array
+          items: { type: string }
+        suggestions: { type: [string, 'null'] }
+        follow_up_tip: { type: [string, 'null'] }
+        generated_at: { type: [string, 'null'], format: date-time }
+        ai_model_used: { type: [string, 'null'] }
+
+    FeedbackSummary:
+      type: object
+      properties:
+        session_id: { type: string, format: uuid }
+        overall_score: { $ref: '#/components/schemas/Score' }
+        scores:
+          type: object
+          properties:
+            relevance: { $ref: '#/components/schemas/Score' }
+            completeness: { $ref: '#/components/schemas/Score' }
+            technical_accuracy: { $ref: '#/components/schemas/Score' }
+            clarity: { $ref: '#/components/schemas/Score' }
+            confidence: { $ref: '#/components/schemas/Score' }
+        questions_graded: { type: integer }
+        top_strengths:
+          type: array
+          items: { type: string }
+        areas_to_improve:
+          type: array
+          items: { type: string }
+
+    # ── History ────────────────────────────────────────────────────────────
+
+    HistoryItem:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        session_title: { type: [string, 'null'] }
+        session_kind: { $ref: '#/components/schemas/SessionKind' }
+        status: { $ref: '#/components/schemas/SessionStatus' }
+        job_title: { type: [string, 'null'] }
+        company_name: { type: [string, 'null'] }
+        overall_score: { $ref: '#/components/schemas/Score' }
+        total_questions: { type: integer }
+        questions_answered: { type: integer }
+        started_at: { type: [string, 'null'], format: date-time }
+        completed_at: { type: [string, 'null'], format: date-time }
+        duration_seconds: { type: [integer, 'null'] }
+        is_archived: { type: boolean }
+
+    HistoryDetail:
+      allOf:
+        - $ref: '#/components/schemas/HistoryItem'
+        - type: object
+          properties:
+            notes: { type: [string, 'null'] }
+            job_description: { $ref: '#/components/schemas/JobDescriptionSummary' }
+            questions:
+              type: array
+              items: { $ref: '#/components/schemas/QuestionWithResponse' }
+
+    HistoryStats:
+      type: object
+      properties:
+        total_sessions:
+          type: integer
+          description: Reviewable sessions — status `completed` or `paused`.
+        scored_sessions:
+          type: integer
+          description: How many of those carry an overall score.
+        average_score:
+          allOf:
+            - $ref: '#/components/schemas/Score'
+          description: |
+            Mean over the scored sessions only, rounded to 2 decimal places —
+            the precision the score columns themselves use. Null when no
+            session has been scored.
+
+    # ── CV ─────────────────────────────────────────────────────────────────
+
+    TailoredCv:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        session_id: { type: [string, 'null'], format: uuid }
+        job_description_id: { type: [string, 'null'], format: uuid }
+        source_file_name:
+          type: [string, 'null']
+          description: Display only. The extracted text of the uploaded CV is never stored.
+        document:
+          type: object
+          description: The rewritten CV — summary, skills, experience, education, and so on.
+          additionalProperties: true
+        tailoring_notes:
+          type: array
+          description: What the AI changed, and why it helps for this job.
+          items: { type: string }
+        keywords_matched:
+          type: array
+          description: Job-description terms the tailored CV now evidences.
+          items: { type: string }
+        gaps:
+          type: array
+          description: Requirements the CV does not evidence, stated honestly.
+          items: { type: string }
+        created_at: { type: string, format: date-time }

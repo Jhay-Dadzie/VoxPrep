@@ -1,0 +1,36 @@
+sequenceDiagram
+    autonumber
+    participant C as Client
+    participant H as helmet + CORS
+    participant B as body / cookie parsers
+    participant L as access logger
+    participant P as protect
+    participant Ctl as Controller
+    participant Svc as Service
+    participant DB as Database
+    participant E as Error handler
+
+    C->>H: HTTP request
+    H->>B: headers set, origin checked
+    B->>L: JSON / urlencoded / multipart (≤10 MB body)
+    L->>P: method, url, status, duration recorded on finish
+    P->>P: verify bearer token
+    alt token invalid
+        P-->>C: 401 { status: "error", message }
+    else token valid
+        P->>Ctl: req.user attached
+        Ctl->>Ctl: schema validation
+        alt invalid payload
+            Ctl-->>C: 400 with the specific reason
+        else valid
+            Ctl->>Svc: typed arguments
+            Svc->>DB: query, filtered by user_id
+            DB-->>Svc: rows
+            Svc-->>Ctl: domain result
+            Ctl-->>C: 2xx { status: "success", data }
+        end
+    end
+
+    Note over Ctl,E: any thrown error is caught by asyncHandler
+    Ctl->>E: next(err)
+    E-->>C: err.statusCode, or 500 with a flat message

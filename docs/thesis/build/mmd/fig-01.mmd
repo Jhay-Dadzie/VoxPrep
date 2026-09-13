@@ -1,0 +1,45 @@
+flowchart TB
+    C(["Candidate"])
+
+    subgraph S["VoxPrep"]
+        direction TB
+        UC1["Manage account"]
+        UC2["Supply source material"]
+        UC3["Prepare a session"]
+        UC4["Seat a panel"]
+        UC5["Sit a spoken interview"]
+        UC6["Sit a written examination"]
+        UC7["Review feedback"]
+        UC8["Review history"]
+        UC9["Tailor a CV"]
+        UC10["Retake a session"]
+    end
+
+    Auth(["Auth provider"])
+    LLM(["Language model"])
+    VA(["Voice agent"])
+
+    C --- UC1
+    C --- UC2
+    C --- UC3
+    C --- UC5
+    C --- UC6
+    C --- UC7
+    C --- UC8
+    C --- UC9
+    C --- UC10
+
+    UC3 -.->|includes| UC2
+    UC5 -.->|includes| UC4
+    UC5 -.->|includes| UC3
+    UC6 -.->|includes| UC3
+    UC7 -.->|extends| UC5
+    UC9 -.->|extends| UC7
+    UC10 -.->|extends| UC8
+
+    UC1 --- Auth
+    UC3 --- LLM
+    UC5 --- VA
+    UC6 --- LLM
+    UC7 --- LLM
+    UC9 --- LLM

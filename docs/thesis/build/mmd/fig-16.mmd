@@ -1,0 +1,10 @@
+flowchart TB
+    E["<b>Manual end-to-end</b><br/>full journeys on device<br/>§5.2.3"]
+    I["<b>Integration</b> — routes through controller, service,<br/>mapper, and mocked persistence"]
+    U["<b>Unit</b> — pure logic: scoring engine, transcript pairer,<br/>panel seating, format registry, parsers"]
+
+    E --- I --- U
+
+    style U fill:#e8f4ea,stroke:#5a8f6b
+    style I fill:#eef1f8,stroke:#6b7aa1
+    style E fill:#f8eeee,stroke:#a16b6b

@@ -1,0 +1,24 @@
+sequenceDiagram
+    autonumber
+    participant App as Client
+    participant API as REST API
+    participant AI as Language model
+    participant DB as Database
+
+    App->>API: POST /exams/prepare (text or document)
+    API->>AI: generate 30 questions × 4 options with marking scheme
+    Note right of API: The slowest request in the system.<br/>The client budgets for it explicitly.
+    API->>DB: insert session (session_kind='exam') + exam_questions
+    API-->>App: 201 { session, question_count, option_count }
+
+    App->>API: GET /exams/:sessionId
+    API-->>App: questions <b>without</b> correct_option or explanation
+
+    loop each answer
+        App->>API: PUT /exams/:sessionId/answers/:questionId
+        API-->>App: { answered_count, total_questions }
+    end
+
+    App->>API: POST /exams/:sessionId/submit
+    API->>DB: write is_correct per answer, score the session
+    API-->>App: 200 marked paper with explanations

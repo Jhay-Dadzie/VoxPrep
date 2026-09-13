@@ -1,0 +1,18 @@
+stateDiagram-v2
+    [*] --> Opened : client connects
+    Opened --> Authenticating : first frame received
+    Opened --> Closed4401 : 10 s elapsed with no frame
+    Authenticating --> Closed4401 : bad frame, bad JSON, or invalid token
+    Authenticating --> Loading : credential accepted
+    Loading --> Closed : session not owned or already completed
+    Loading --> Ready : context loaded, panel seated, upstream configured
+    Ready --> Conversing : first candidate audio
+    Conversing --> Conversing : turn completes, floor may rotate
+    Conversing --> Closing : question cap reached
+    Conversing --> Closing : idle timeout
+    Conversing --> Closing : candidate ends session
+    Closing --> Finishing : closing remark spoken
+    Closing --> Finishing : 15 s backstop fires
+    Finishing --> Closed : queue drained, session completed, done emitted
+    Closed4401 --> [*]
+    Closed --> [*]

@@ -1,0 +1,15 @@
+sequenceDiagram
+    participant R1 as Request A
+    participant R2 as Request B
+    participant I as Axios interceptor
+    participant Auth as Auth service
+
+    R1->>I: 401
+    I->>I: mark refresh in flight
+    I->>Auth: refresh(refresh_token)
+    R2->>I: 401
+    I->>I: queue behind in-flight refresh
+    Auth-->>I: new access token
+    I->>I: store, resolve queue
+    I->>R1: retry once
+    I->>R2: retry once

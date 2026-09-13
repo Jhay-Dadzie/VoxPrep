@@ -1,0 +1,11 @@
+flowchart TB
+    User(["Candidate / student"])
+    VoxPrep["<b>VoxPrep</b><br/>Interview and examination practice platform"]
+    Supabase["<b>Supabase</b><br/>PostgreSQL · Auth · Storage"]
+    Gemini["<b>Language model service</b><br/>Question composition, grading,<br/>paper generation, CV rewriting, TTS"]
+    Deepgram["<b>Voice agent service</b><br/>Duplex speech: listen, think, speak"]
+
+    User -->|"Practises interviews, sits papers,<br/>reviews feedback"| VoxPrep
+    VoxPrep -->|"Authenticates users,<br/>reads and writes all data"| Supabase
+    VoxPrep -->|"Generates and grades"| Gemini
+    VoxPrep -->|"Streams the live interview"| Deepgram

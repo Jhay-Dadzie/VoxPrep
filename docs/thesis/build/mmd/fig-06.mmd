@@ -1,0 +1,110 @@
+erDiagram
+    users ||--o{ job_descriptions : owns
+    users ||--o{ interview_sessions : owns
+    users ||--o{ user_responses : owns
+    users ||--o{ exam_answers : owns
+    users ||--o{ tailored_cvs : owns
+    users ||--o{ session_statistics : owns
+    users ||--|| user_statistics : has
+
+    job_descriptions ||--o{ interview_sessions : "is material for"
+
+    interview_sessions ||--o{ interview_questions : "asks (spoken)"
+    interview_sessions ||--o{ exam_questions : "sets (written)"
+    interview_sessions ||--o{ user_responses : collects
+    interview_sessions ||--o{ exam_answers : collects
+    interview_sessions ||--o{ feedback : accumulates
+    interview_sessions ||--|| session_statistics : "rolls up to"
+    interview_sessions ||--o{ tailored_cvs : "is context for"
+
+    interview_questions ||--o{ user_responses : "is answered by"
+    exam_questions ||--|| exam_answers : "is answered by"
+    user_responses ||--|| feedback : "is graded into"
+
+    users {
+        uuid id PK "= auth user id"
+        varchar email UK
+        varchar full_name
+        boolean is_active
+        timestamptz last_login
+    }
+    job_descriptions {
+        uuid id PK
+        uuid user_id FK
+        varchar title
+        text job_content
+        text_array key_skills
+        tsvector search_vector "generated"
+    }
+    interview_sessions {
+        uuid id PK
+        uuid user_id FK
+        uuid job_description_id FK
+        varchar session_kind "interview | exam"
+        varchar status "in_progress | completed | paused"
+        integer total_questions
+        integer questions_answered
+        decimal overall_score
+        boolean is_archived
+    }
+    interview_questions {
+        uuid id PK
+        uuid session_id FK
+        integer question_number
+        varchar question_type
+        text question_text
+        varchar difficulty_level
+    }
+    exam_questions {
+        uuid id PK
+        uuid session_id FK
+        integer question_number
+        text question_text
+        jsonb options
+        varchar correct_option "withheld while sitting"
+        text explanation "withheld while sitting"
+        varchar topic
+    }
+    exam_answers {
+        uuid id PK
+        uuid question_id FK "unique — one selection per item"
+        uuid session_id FK
+        uuid user_id FK
+        varchar selected_option
+        boolean is_correct "written at marking time"
+    }
+    user_responses {
+        uuid id PK
+        uuid question_id FK
+        uuid session_id FK
+        uuid user_id FK
+        text transcribed_text
+        varchar original_audio_url
+        decimal transcription_confidence
+    }
+    feedback {
+        uuid id PK
+        uuid response_id FK "unique — one grading per response"
+        uuid session_id FK
+        decimal relevance_score
+        decimal completeness_score
+        decimal clarity_score
+        decimal confidence_score
+        decimal overall_response_score
+        text strengths
+        text improvements
+    }
+    session_statistics {
+        uuid id PK
+        uuid session_id FK "unique — one rollup per session"
+        decimal avg_relevance_score
+        integer questions_answered_count
+        text_array top_strengths
+    }
+    tailored_cvs {
+        uuid id PK
+        uuid user_id FK
+        uuid session_id FK
+        varchar source_file_name "name only"
+        integer source_char_count "count only"
+    }
