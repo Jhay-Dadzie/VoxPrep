@@ -2,6 +2,7 @@ export interface SignupRequest {
   email: string
   password: string
   full_name?: string
+  avatar_url?: string
 }
 
 export interface LoginRequest {
@@ -17,6 +18,7 @@ export interface AuthResponse {
       id: string
       email: string
       full_name: string | null
+      avatar_url?: string | null
       is_active: boolean
       profile_completed: boolean
       created_at: string
@@ -40,6 +42,7 @@ export interface RefreshResponse {
       id: string
       email: string
       full_name: string | null
+      avatar_url?: string | null
       is_active: boolean
       profile_completed: boolean
       created_at: string
@@ -58,6 +61,7 @@ export interface CurrentUserResponse {
     id: string
     email: string
     full_name: string | null
+    avatar_url?: string | null
     is_active: boolean
     profile_completed: boolean
     created_at: string
@@ -67,6 +71,7 @@ export interface CurrentUserResponse {
 
 export interface UpdateProfileRequest {
   full_name?: string
+  avatar_url?: string
 }
 
 export interface UpdateProfileResponse {
@@ -75,6 +80,7 @@ export interface UpdateProfileResponse {
     id: string
     email: string
     full_name: string | null
+    avatar_url?: string | null
     is_active: boolean
     profile_completed: boolean
     created_at: string
@@ -142,6 +148,7 @@ export interface GoogleCallbackResponse {
       id: string
       email: string
       full_name: string | null
+      avatar_url?: string | null
       is_active: boolean
       profile_completed: boolean
       created_at: string
